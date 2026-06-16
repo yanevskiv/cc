@@ -1,0 +1,196 @@
+==============================================================================
+ cc - a tiny C compiler:  TODO  (the road to "fully supported")
+==============================================================================
+
+This is a checklist of features to take cc from a one-sitting teaching base to
+a more complete C compiler.  It is roughly ordered by difficulty, mirroring the
+tiers in EXTEN.txt:
+
+    [F] front end only   - lex/lexer.flex + lex/parser.y (often desugars to
+                           nodes that already exist)
+    [N] new node + gen   - also h/ast.h (a NodeKind) and src/codegen.c
+    [T] needs types      - blocked on a real type system; see section 5
+    [B] back end work    - src/codegen.c (sizes, registers, ABI)
+
+Tick a box with [x] when the feature is implemented AND covered by a test in
+test/test.c.  Read INTRO.txt for the design and EXTEN.txt for the recipe.
+
+
+==============================================================================
+ 1. QUICK WINS  (front end only -- desugar to existing nodes)
+==============================================================================
+
+  [ ] break / continue            [N] keep a stack of loop labels in codegen;
+                                   the keywords are already tokenised
+  [ ] ternary  a ? b : c          [F] add ':' / '?' tokens; desugar to ND_IF
+                                   used as an expression (needs an expr-if node)
+  [ ] compound assignment         [F] += -= *= /= %= &= |= ^= <<= >>=
+                                   desugar `a OP= b` to `a = a OP b`
+  [ ] do { } while (cond)         [F] desugar to a for with a trailing test
+  [ ] infinite loop  loop { }     [F] desugar to for(;;) (see EXTEN.txt idea)
+  [ ] comma operator  a, b        [F] evaluate a, discard, yield b
+  [ ] for-loop declarations       [F] `for (int i = 0; ...)` -- needs a scope
+                                   that ends with the loop
+
+
+==============================================================================
+ 2. OPERATORS
+==============================================================================
+
+  [ ] pre/post increment  ++ --   [N] both prefix and postfix; lvalue required
+  [ ] bitwise  & | ^ ~            [N] single '&' currently only lexes inside &&
+  [ ] shifts  << >>               [N] new tokens + nodes; map to sal/sar/shr
+  [ ] sizeof (expr) / sizeof(type)[T] result depends on the type system
+  [ ] cast  (type) expr           [T] parse + truncate/extend per target type
+  [ ] address-of  &x              [N] gen_addr already exists; expose as unary
+  [ ] dereference  *p             [N] load/store through a computed address
+  [ ] array/member access on lhs  [N] *p = v, a[i] = v, s.f = v  (lvalue gen)
+
+
+==============================================================================
+ 3. POINTERS  (currently parsed but inert)
+==============================================================================
+
+  [ ] real pointer values         [T] track pointee type, not just "64-bit int"
+  [ ] address-of / dereference     [N] see section 2
+  [ ] pointer arithmetic           [T] p + n scales by sizeof(*p); p - q divides
+  [ ] pointer comparisons          [T] ==, !=, <, ... between compatible ptrs
+  [ ] NULL / pointer-to-int rules  [T] implicit conversions and 0 == NULL
+  [ ] string literal as char*      [B] already emits a label; type it as char*
+
+
+==============================================================================
+ 4. ARRAYS
+==============================================================================
+
+  [ ] array declarations  T a[N]  [T] reserve N*sizeof(T) on the stack
+  [ ] indexing  a[i]              [N] desugar to *(a + i) once pointers work
+  [ ] array-to-pointer decay      [T] `a` in an expression yields &a[0]
+  [ ] multidimensional arrays     [T] row-major addressing
+  [ ] array initialisers  { ... } [T] also string init of char[]
+
+
+==============================================================================
+ 5. TYPE SYSTEM  (unblocks most of the above)
+==============================================================================
+
+  [ ] a Type struct               sizes, signedness, kind (int/char/ptr/arr/...)
+  [ ] attach Type to every Node   computed bottom-up during/after parsing
+  [ ] integer sizes               char=1, short=2, int=4, long=8 (+ unsigned)
+  [ ] signedness                  signed/unsigned; movsx vs movzx on load
+  [ ] usual arithmetic conversions integer promotion + common-type rules
+  [ ] implicit conversions        assignment, call args, return value
+  [ ] explicit casts              see section 2
+  [ ] type errors in diagnostics  "incompatible types", "not a pointer", ...
+
+
+==============================================================================
+ 6. AGGREGATES & USER TYPES
+==============================================================================
+
+  [ ] struct                      [T] layout, field offsets, alignment, padding
+  [ ] union                       [T] overlapping fields
+  [ ] member access  . and ->     [N] lvalue addressing of fields
+  [ ] enum                        [F/T] named integer constants
+  [ ] typedef                     [F] lexer hack or symbol table for type names
+  [ ] bitfields                   [B] later; needs sub-byte field access
+  [ ] anonymous structs/unions    [T] later
+
+
+==============================================================================
+ 7. FUNCTIONS  (beyond the current 6-register limit)
+==============================================================================
+
+  [ ] more than 6 arguments       [B] pass the 7th+ on the stack per the ABI
+  [ ] function pointers           [T] call through an expression, not a name
+  [ ] proper variadics            [T] real va_list, not just printf-by-accident
+  [ ] struct args / return         [B] by-value aggregates per System V ABI
+  [ ] forward declarations         [ ] type-check calls against prototypes
+  [ ] static / inline functions    [F/B] storage + linkage
+
+
+==============================================================================
+ 8. GLOBALS & STORAGE
+==============================================================================
+
+  [ ] global variables            [B] emit in .data / .bss, address by symbol
+  [ ] global initialisers         [B] constant folding for static init
+  [ ] static locals               [B] function-local but statically allocated
+  [ ] extern declarations         [ ] reference symbols defined elsewhere
+  [ ] const enforcement           [T] currently parsed and ignored
+  [ ] string-literal dedup         [B] pool identical literals (optional)
+
+
+==============================================================================
+ 9. CONTROL FLOW
+==============================================================================
+
+  [ ] switch / case / default     [N] jump table or compare chain; with break
+  [ ] goto and labels             [N] label table per function
+  [ ] ?: as a statement context   [F] see ternary in section 1
+
+
+==============================================================================
+ 10. LITERALS & CONSTANTS
+==============================================================================
+
+  [ ] floating point  1.5, 1e3    [B] big: needs xmm registers and a Type
+  [ ] long / unsigned suffixes    [F] 10L, 10U, 10UL, 10LL
+  [ ] octal integer literals      [F] 0755
+  [ ] binary literals  0b1010      [F] (GNU/C23 extension; optional)
+  [ ] more escape sequences       [F] \xHH, \NNN octal, \a \b \f \v
+  [ ] character/integer constant   verify char promotion to int
+
+
+==============================================================================
+ 11. PREPROCESSOR
+==============================================================================
+
+  [ ] a preprocessing pass        [F] run before flex, or as a flex start state
+  [ ] #include  "..." and <...>   [F] file lookup + nesting
+  [ ] #define object-like macros  [F] simple text substitution
+  [ ] #define function-like macros[F] parameters, argument expansion
+  [ ] #if / #ifdef / #ifndef      [F] conditional compilation + #else/#endif
+  [ ] #undef, #pragma, #error      [F]
+  [ ] line markers for #line       [ ] keep diagnostics accurate
+  (Alternatively: shell out to the system `cpp` as a first stage.)
+
+
+==============================================================================
+ 12. CODE GENERATION & BACKEND
+==============================================================================
+
+  [ ] sized loads/stores          [B] movb/movw/movl/movq per type size
+  [ ] sign/zero extension on load  [B] movsx / movzx driven by signedness
+  [ ] correct division for sizes  [B] cdq/cqo and 32- vs 64-bit idiv
+  [ ] float register handling     [B] xmm0-7 for args/returns, sse ops
+  [ ] spill args 7+ to the stack  [B] see section 7
+  [ ] a small optimiser           [B] const folding, dead code, peephole
+  [ ] register allocation          [B] reduce the push/pop churn (big project)
+  [ ] -S to emit assembly only     [ ] handy for debugging the back end
+
+
+==============================================================================
+ 13. DIAGNOSTICS & ROBUSTNESS
+==============================================================================
+
+  [ ] column numbers in errors    [ ] currently line-only
+  [ ] caret / source snippet       [ ] show the offending line
+  [ ] continue after first error   [ ] report several errors per run
+  [ ] redeclaration / scope errors [ ] currently only "undeclared identifier"
+  [ ] graceful out-of-memory        replace bare calloc/malloc checks
+  [ ] guard MAX_STRINGS overflow   [ ] add_string() can currently overrun
+
+
+==============================================================================
+ 14. TOOLING & TESTS
+==============================================================================
+
+  [ ] a real test runner           assert-style cases with expected exit codes
+  [ ] regression suite per feature  one file per section above
+  [ ] self-host milestone           compile a non-trivial program with cc
+  [ ] fuzz the parser               catch crashes on malformed input
+  [ ] CI: build + run tests          on every change
+
+------------------------------------------------------------------------------
+vim: set tw=80 cc=80 et :

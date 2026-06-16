@@ -1,0 +1,185 @@
+==============================================================================
+ cc - a tiny C compiler:  HOW TO EXTEND IT
+==============================================================================
+
+This guide shows how to add your own syntax to cc.  Read INTRO.txt first for
+the overall design.
+
+The mental model is simple: a feature flows through the same four files the
+compiler is built from, and you touch only the ones your feature needs.
+
+    new word or symbol        -> lex/lexer.flex     (a token)
+    new grammar / statement    -> lex/parser.y       (a rule + an action)
+    new kind of operation      -> h/ast.h            (a NodeKind)
+                                  src/codegen.c       (how to emit it)
+
+If your feature can be expressed with nodes that already exist, you only have
+to change the scanner and the parser.  That is the cheapest kind of extension,
+so we start there.
+
+After any change, rebuild and test from the project root:
+
+    make            # rebuild build/cc
+    make -C build   # compile build/test.c with the new ./cc
+    ./build/test    # run it
+
+
+==============================================================================
+ EXAMPLE 1:  an `unless` statement  (front end only)
+==============================================================================
+
+Goal:   `unless (cond) stmt`  should run stmt only when cond is false, i.e. it
+is exactly `if (!cond) stmt`.  Because ND_IF and ND_NOT already exist, we need
+NO new AST node and NO code-generator change.
+
+------------------------------------------------------------------------------
+Step 1 - tokenise the keyword.  In lex/lexer.flex, next to the other keyword
+rules (near "return", "if", ...), add:
+
+    "unless"                return UNLESS;
+
+------------------------------------------------------------------------------
+Step 2 - declare the token.  In lex/parser.y, add UNLESS to the keyword
+%token line:
+
+    %token INT CHAR VOID CONST RETURN IF ELSE FOR WHILE BREAK CONTINUE UNLESS
+
+------------------------------------------------------------------------------
+Step 3 - add a grammar rule.  In lex/parser.y, inside the `stmt:` rule, add a
+new alternative (the %prec mirrors the `if` rule and keeps the grammar
+conflict-free):
+
+    | UNLESS '(' expr ')' stmt %prec LOWER_THAN_ELSE
+        { Node *n = new_node(ND_IF);
+          n->cond = new_unary(ND_NOT, $3);   /* unless(c) == if(!c) */
+          n->then = $5;
+          $$ = n; }
+
+That is the whole feature.  The parser desugars `unless` into the if/not tree
+the back end already knows how to compile.
+
+------------------------------------------------------------------------------
+Step 4 - try it.  Add to test/test.c (inside main):
+
+    unless (1 == 2)
+        printf("math still works\n");
+
+Then `make && make -C build && ./build/test`.
+
+
+==============================================================================
+ EXAMPLE 2:  a `**` power operator  (all four layers)
+==============================================================================
+
+Goal:   `a ** b` evaluates to a raised to the power b (for b >= 0).  This is a
+genuinely new operation, so it touches every layer, including code generation.
+
+------------------------------------------------------------------------------
+Step 1 - a new AST node kind.  In h/ast.h, add ND_POW to the NodeKind enum,
+for instance right after ND_MUL:
+
+    ND_MUL,       /* lhs * rhs */
+    ND_POW,       /* lhs ** rhs */
+
+------------------------------------------------------------------------------
+Step 2 - tokenise `**`.  In lex/lexer.flex, among the multi-character operator
+rules (next to "==", "!=", ...), add:
+
+    "**"                    return POW;
+
+flex always prefers the longest match, so `**` is recognised as POW and never
+as two `*` tokens.
+
+------------------------------------------------------------------------------
+Step 3 - declare the token and its precedence.  In lex/parser.y add the token:
+
+    %token POW
+
+and give it precedence.  Power should bind tighter than * and / and be
+right-associative (so 2 ** 3 ** 2 == 2 ** 9).  Add a line just below the
+`* / %` line in the precedence block:
+
+    %left  '*' '/' '%'
+    %right POW
+
+------------------------------------------------------------------------------
+Step 4 - add the grammar rule.  In lex/parser.y, inside the `expr:` rule, add:
+
+    | expr POW expr        { $$ = new_binary(ND_POW, $1, $3); }
+
+------------------------------------------------------------------------------
+Step 5 - generate code.  ND_POW is a binary operator, so it falls through to
+the second switch in src/codegen.c (the one reached after the left operand is
+in %rax and the right operand has been pop'd into %rdi).  Add a case there:
+
+    case ND_POW: {
+        int c = count();
+        emit("  mov %%rax, %%rcx");       /* %rcx = base  */
+        emit("  mov $1, %%rax");          /* %rax = result (starts at 1) */
+        emit(".L.pow.%d:", c);
+        emit("  cmp $0, %%rdi");          /* while exponent > 0:        */
+        emit("  jle .L.powend.%d", c);
+        emit("  imul %%rcx, %%rax");      /*   result *= base           */
+        emit("  dec %%rdi");              /*   exponent--               */
+        emit("  jmp .L.pow.%d", c);
+        emit(".L.powend.%d:", c);
+        return;
+    }
+
+`count()` hands out unique label numbers, so nested or repeated `**` each get
+their own loop labels.
+
+------------------------------------------------------------------------------
+Step 6 - try it.  Add to test/test.c (inside main):
+
+    printf("2 ** 10 = %d\n", 2 ** 10);     /* expect 1024 */
+
+Then `make && make -C build && ./build/test`.
+
+
+==============================================================================
+ A QUICK CHECKLIST
+==============================================================================
+
+When adding a feature, ask:
+
+  1. Does it introduce a new word or symbol?
+        -> add a rule to lex/lexer.flex, and a %token to lex/parser.y.
+
+  2. Does it introduce new syntax (a statement shape, an operator)?
+        -> add a grammar rule + action to lex/parser.y.
+
+  3. Can it be expressed with existing node kinds?
+        Yes -> you are done after the parser (like `unless`).
+        No  -> add a NodeKind to h/ast.h and emit it in src/codegen.c
+               (like `**`).
+
+  4. Rebuild and test:  make && make -C build && ./build/test
+
+Useful building blocks already in the tree:
+  - new_node, new_unary, new_binary, new_num, new_var_node  (src/ast.c)
+  - declare_var / find_var for locals, add_string for string literals
+  - in codegen: emit(...), push()/pop(), count(), gen_expr(), gen_stmt()
+
+
+==============================================================================
+ IDEAS FOR FURTHER EXTENSIONS
+==============================================================================
+
+  easy   (front end only):
+    - a `loop { ... }` infinite loop  (desugar to a for with no condition)
+    - C-style `a ? b : c`             (desugar to an if expression)
+    - compound assignment `+=`, `-=`  (desugar `a += b` to `a = a + b`)
+
+  medium (a new node + codegen):
+    - break / continue                (keep a stack of loop labels in codegen)
+    - the bitwise operators & | ^ << >>
+    - a unary address-of / dereference once you add real pointers
+
+  larger (new concepts):
+    - global variables and arrays
+    - a real type system with sizes and signedness
+    - structs, then a small optimiser
+
+------------------------------------------------------------------------------
+vim: set tw=80 cc=80 et :
