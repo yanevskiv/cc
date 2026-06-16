@@ -8,7 +8,7 @@
 // The finished program, filled in by the parser.
 Ast_Function *Ast_Program;
 
-// Table of interned string literals, indexed by ND_STR slot.
+// Table of interned string literals, indexed by AST_NODE_KIND_STR slot.
 static char *Ast_Strings[MAX_STRINGS];
 
 // Number of entries currently used in Ast_Strings.
@@ -45,7 +45,7 @@ int Ast_AddString(char *s)
 Ast_Node *Ast_NewNode(Ast_NodeKind kind)
 {
     Ast_Node *n = calloc(1, sizeof(Ast_Node));
-    n->kind = kind;
+    n->an_kind = kind;
     return n;
 }
 
@@ -53,8 +53,8 @@ Ast_Node *Ast_NewNode(Ast_NodeKind kind)
 Ast_Node *Ast_NewBinary(Ast_NodeKind kind, Ast_Node *lhs, Ast_Node *rhs)
 {
     Ast_Node *n = Ast_NewNode(kind);
-    n->lhs = lhs;
-    n->rhs = rhs;
+    n->an_lhs = lhs;
+    n->an_rhs = rhs;
     return n;
 }
 
@@ -62,23 +62,23 @@ Ast_Node *Ast_NewBinary(Ast_NodeKind kind, Ast_Node *lhs, Ast_Node *rhs)
 Ast_Node *Ast_NewUnary(Ast_NodeKind kind, Ast_Node *lhs)
 {
     Ast_Node *n = Ast_NewNode(kind);
-    n->lhs = lhs;
+    n->an_lhs = lhs;
     return n;
 }
 
 // Builds an integer-literal node.
 Ast_Node *Ast_NewNum(long val)
 {
-    Ast_Node *n = Ast_NewNode(ND_NUM);
-    n->val = val;
+    Ast_Node *n = Ast_NewNode(AST_NODE_KIND_NUM);
+    n->an_val = val;
     return n;
 }
 
 // Builds a node that references a local variable.
 Ast_Node *Ast_NewVarNode(Ast_Var *var)
 {
-    Ast_Node *n = Ast_NewNode(ND_VAR);
-    n->var = var;
+    Ast_Node *n = Ast_NewNode(AST_NODE_KIND_VAR);
+    n->an_var = var;
     return n;
 }
 
@@ -91,8 +91,8 @@ void Ast_BeginScope(void)
 // Looks up a variable by name in the current scope, or NULL.
 Ast_Var *Ast_FindVar(const char *name)
 {
-    for (Ast_Var *v = Ast_Locals; v; v = v->next)
-        if (strcmp(v->name, name) == 0)
+    for (Ast_Var *v = Ast_Locals; v; v = v->av_next)
+        if (strcmp(v->av_name, name) == 0)
             return v;
     return NULL;
 }
@@ -104,8 +104,8 @@ Ast_Var *Ast_DeclareVar(const char *name)
     if (v)
         return v; // re-declaration: reuse the existing slot
     v = calloc(1, sizeof(Ast_Var));
-    v->name    = strdup(name);
-    v->next    = Ast_Locals;
+    v->av_name = strdup(name);
+    v->av_next = Ast_Locals;
     Ast_Locals = v;
     return v;
 }
@@ -155,8 +155,8 @@ static int Gen_AlignTo(int n, int align)
 // Computes the address of an lvalue into %rax.
 static void Gen_Addr(Ast_Node *node)
 {
-    if (node->kind == ND_VAR) {
-        Gen_Emit("  lea %d(%%rbp), %%rax", node->var->offset);
+    if (node->an_kind == AST_NODE_KIND_VAR) {
+        Gen_Emit("  lea %d(%%rbp), %%rax", node->an_var->av_offset);
         return;
     }
     error("codegen: not an lvalue");
@@ -165,40 +165,40 @@ static void Gen_Addr(Ast_Node *node)
 // Emits code for an expression, leaving its result in %rax.
 static void Gen_Expr(Ast_Node *node)
 {
-    switch (node->kind) {
-    case ND_NUM:
-        Gen_Emit("  mov $%ld, %%rax", node->val);
+    switch (node->an_kind) {
+    case AST_NODE_KIND_NUM:
+        Gen_Emit("  mov $%ld, %%rax", node->an_val);
         return;
-    case ND_STR:
-        Gen_Emit("  lea .Lstr%d(%%rip), %%rax", node->str_idx);
+    case AST_NODE_KIND_STR:
+        Gen_Emit("  lea .Lstr%d(%%rip), %%rax", node->an_str_idx);
         return;
-    case ND_VAR:
+    case AST_NODE_KIND_VAR:
         Gen_Addr(node);
         Gen_Emit("  mov (%%rax), %%rax");
         return;
-    case ND_ASSIGN:
-        Gen_Addr(node->lhs);
+    case AST_NODE_KIND_ASSIGN:
+        Gen_Addr(node->an_lhs);
         Gen_Push();
-        Gen_Expr(node->rhs);
+        Gen_Expr(node->an_rhs);
         Gen_Pop("%rdi");
         Gen_Emit("  mov %%rax, (%%rdi)");
         return;
-    case ND_NEG:
-        Gen_Expr(node->lhs);
+    case AST_NODE_KIND_NEG:
+        Gen_Expr(node->an_lhs);
         Gen_Emit("  neg %%rax");
         return;
-    case ND_NOT:
-        Gen_Expr(node->lhs);
+    case AST_NODE_KIND_NOT:
+        Gen_Expr(node->an_lhs);
         Gen_Emit("  cmp $0, %%rax");
         Gen_Emit("  sete %%al");
         Gen_Emit("  movzb %%al, %%rax");
         return;
-    case ND_AND: {
+    case AST_NODE_KIND_AND: {
         int c = Gen_Count();
-        Gen_Expr(node->lhs);
+        Gen_Expr(node->an_lhs);
         Gen_Emit("  cmp $0, %%rax");
         Gen_Emit("  je .L.false.%d", c);
-        Gen_Expr(node->rhs);
+        Gen_Expr(node->an_rhs);
         Gen_Emit("  cmp $0, %%rax");
         Gen_Emit("  je .L.false.%d", c);
         Gen_Emit("  mov $1, %%rax");
@@ -208,12 +208,12 @@ static void Gen_Expr(Ast_Node *node)
         Gen_Emit(".L.end.%d:", c);
         return;
     }
-    case ND_OR: {
+    case AST_NODE_KIND_OR: {
         int c = Gen_Count();
-        Gen_Expr(node->lhs);
+        Gen_Expr(node->an_lhs);
         Gen_Emit("  cmp $0, %%rax");
         Gen_Emit("  jne .L.true.%d", c);
-        Gen_Expr(node->rhs);
+        Gen_Expr(node->an_rhs);
         Gen_Emit("  cmp $0, %%rax");
         Gen_Emit("  jne .L.true.%d", c);
         Gen_Emit("  mov $0, %%rax");
@@ -223,9 +223,9 @@ static void Gen_Expr(Ast_Node *node)
         Gen_Emit(".L.end.%d:", c);
         return;
     }
-    case ND_CALL: {
+    case AST_NODE_KIND_CALL: {
         int nargs = 0;
-        for (Ast_Node *a = node->args; a; a = a->next) {
+        for (Ast_Node *a = node->an_args; a; a = a->an_next) {
             Gen_Expr(a);
             Gen_Push();
             nargs++;
@@ -239,7 +239,7 @@ static void Gen_Expr(Ast_Node *node)
         if (realign)
             Gen_Emit("  sub $8, %%rsp");
         Gen_Emit("  mov $0, %%al"); // no vector regs for varargs
-        Gen_Emit("  call %s", node->funcname);
+        Gen_Emit("  call %s", node->an_funcname);
         if (realign)
             Gen_Emit("  add $8, %%rsp");
         return;
@@ -249,86 +249,86 @@ static void Gen_Expr(Ast_Node *node)
     }
 
     // Binary operators: right operand spilled, left operand in %rax.
-    Gen_Expr(node->rhs);
+    Gen_Expr(node->an_rhs);
     Gen_Push();
-    Gen_Expr(node->lhs);
+    Gen_Expr(node->an_lhs);
     Gen_Pop("%rdi");
     // now: %rax = lhs, %rdi = rhs
 
-    switch (node->kind) {
-    case ND_ADD: Gen_Emit("  add %%rdi, %%rax"); return;
-    case ND_SUB: Gen_Emit("  sub %%rdi, %%rax"); return;
-    case ND_MUL: Gen_Emit("  imul %%rdi, %%rax"); return;
-    case ND_DIV: Gen_Emit("  cqo"); Gen_Emit("  idiv %%rdi"); return;
-    case ND_MOD: Gen_Emit("  cqo"); Gen_Emit("  idiv %%rdi"); Gen_Emit("  mov %%rdx, %%rax"); return;
-    case ND_EQ:
-    case ND_NE:
-    case ND_LT:
-    case ND_LE:
+    switch (node->an_kind) {
+    case AST_NODE_KIND_ADD: Gen_Emit("  add %%rdi, %%rax"); return;
+    case AST_NODE_KIND_SUB: Gen_Emit("  sub %%rdi, %%rax"); return;
+    case AST_NODE_KIND_MUL: Gen_Emit("  imul %%rdi, %%rax"); return;
+    case AST_NODE_KIND_DIV: Gen_Emit("  cqo"); Gen_Emit("  idiv %%rdi"); return;
+    case AST_NODE_KIND_MOD: Gen_Emit("  cqo"); Gen_Emit("  idiv %%rdi"); Gen_Emit("  mov %%rdx, %%rax"); return;
+    case AST_NODE_KIND_EQ:
+    case AST_NODE_KIND_NE:
+    case AST_NODE_KIND_LT:
+    case AST_NODE_KIND_LE:
         Gen_Emit("  cmp %%rdi, %%rax");
-        if      (node->kind == ND_EQ) Gen_Emit("  sete %%al");
-        else if (node->kind == ND_NE) Gen_Emit("  setne %%al");
-        else if (node->kind == ND_LT) Gen_Emit("  setl %%al");
-        else                          Gen_Emit("  setle %%al");
+        if      (node->an_kind == AST_NODE_KIND_EQ) Gen_Emit("  sete %%al");
+        else if (node->an_kind == AST_NODE_KIND_NE) Gen_Emit("  setne %%al");
+        else if (node->an_kind == AST_NODE_KIND_LT) Gen_Emit("  setl %%al");
+        else                                        Gen_Emit("  setle %%al");
         Gen_Emit("  movzb %%al, %%rax");
         return;
     default:
-        error("codegen: unexpected node kind %d", node->kind);
+        error("codegen: unexpected node kind %d", node->an_kind);
     }
 }
 
 // Emits code for a statement.
 static void Gen_Stmt(Ast_Node *node)
 {
-    switch (node->kind) {
-    case ND_RETURN:
-        if (node->lhs)
-            Gen_Expr(node->lhs);
+    switch (node->an_kind) {
+    case AST_NODE_KIND_RETURN:
+        if (node->an_lhs)
+            Gen_Expr(node->an_lhs);
         else
             Gen_Emit("  mov $0, %%rax");
         Gen_Emit("  jmp .L.return.%s", Gen_CurFn);
         return;
-    case ND_IF: {
+    case AST_NODE_KIND_IF: {
         int c = Gen_Count();
-        Gen_Expr(node->cond);
+        Gen_Expr(node->an_cond);
         Gen_Emit("  cmp $0, %%rax");
         Gen_Emit("  je .L.else.%d", c);
-        Gen_Stmt(node->then);
+        Gen_Stmt(node->an_then);
         Gen_Emit("  jmp .L.endif.%d", c);
         Gen_Emit(".L.else.%d:", c);
-        if (node->els)
-            Gen_Stmt(node->els);
+        if (node->an_els)
+            Gen_Stmt(node->an_els);
         Gen_Emit(".L.endif.%d:", c);
         return;
     }
-    case ND_FOR: {
+    case AST_NODE_KIND_FOR: {
         int c = Gen_Count();
-        if (node->init)
-            Gen_Expr(node->init);
+        if (node->an_init)
+            Gen_Expr(node->an_init);
         Gen_Emit(".L.begin.%d:", c);
-        if (node->cond) {
-            Gen_Expr(node->cond);
+        if (node->an_cond) {
+            Gen_Expr(node->an_cond);
             Gen_Emit("  cmp $0, %%rax");
             Gen_Emit("  je .L.endfor.%d", c);
         }
-        Gen_Stmt(node->body);
-        if (node->inc)
-            Gen_Expr(node->inc);
+        Gen_Stmt(node->an_body);
+        if (node->an_inc)
+            Gen_Expr(node->an_inc);
         Gen_Emit("  jmp .L.begin.%d", c);
         Gen_Emit(".L.endfor.%d:", c);
         return;
     }
-    case ND_BLOCK:
-        for (Ast_Node *n = node->body; n; n = n->next)
+    case AST_NODE_KIND_BLOCK:
+        for (Ast_Node *n = node->an_body; n; n = n->an_next)
             Gen_Stmt(n);
         return;
-    case ND_EXPR_STMT:
-        Gen_Expr(node->lhs);
+    case AST_NODE_KIND_EXPR_STMT:
+        Gen_Expr(node->an_lhs);
         return;
-    case ND_NOP:
+    case AST_NODE_KIND_NOP:
         return;
     default:
-        error("codegen: unexpected statement kind %d", node->kind);
+        error("codegen: unexpected statement kind %d", node->an_kind);
     }
 }
 
@@ -336,11 +336,11 @@ static void Gen_Stmt(Ast_Node *node)
 static void Gen_AssignLvarOffsets(Ast_Function *fn)
 {
     int offset = 0;
-    for (Ast_Var *v = fn->locals; v; v = v->next) {
+    for (Ast_Var *v = fn->af_locals; v; v = v->av_next) {
         offset += 8;
-        v->offset = -offset;
+        v->av_offset = -offset;
     }
-    fn->stack_size = Gen_AlignTo(offset, 16);
+    fn->af_stack_size = Gen_AlignTo(offset, 16);
 }
 
 // Emits the .rodata section holding all string literals.
@@ -362,29 +362,29 @@ static void Gen_EmitData(void)
 static void Gen_EmitText(Ast_Function *prog)
 {
     Gen_Emit("  .text");
-    for (Ast_Function *fn = prog; fn; fn = fn->next) {
+    for (Ast_Function *fn = prog; fn; fn = fn->af_next) {
         Gen_AssignLvarOffsets(fn);
-        Gen_CurFn = fn->name;
+        Gen_CurFn = fn->af_name;
 
-        Gen_Emit("  .globl %s", fn->name);
-        Gen_Emit("%s:", fn->name);
+        Gen_Emit("  .globl %s", fn->af_name);
+        Gen_Emit("%s:", fn->af_name);
 
         // prologue
         Gen_Emit("  push %%rbp");
         Gen_Emit("  mov %%rsp, %%rbp");
-        if (fn->stack_size)
-            Gen_Emit("  sub $%d, %%rsp", fn->stack_size);
+        if (fn->af_stack_size)
+            Gen_Emit("  sub $%d, %%rsp", fn->af_stack_size);
 
         // spill incoming parameters to their stack slots
         int i = 0;
-        for (Ast_Var *p = fn->params; p; p = p->param_next)
-            Gen_Emit("  mov %s, %d(%%rbp)", Gen_ArgReg[i++], p->offset);
+        for (Ast_Var *p = fn->af_params; p; p = p->av_param_next)
+            Gen_Emit("  mov %s, %d(%%rbp)", Gen_ArgReg[i++], p->av_offset);
 
-        Gen_Stmt(fn->body);
+        Gen_Stmt(fn->af_body);
 
         // epilogue (fall-through returns 0)
         Gen_Emit("  mov $0, %%rax");
-        Gen_Emit(".L.return.%s:", fn->name);
+        Gen_Emit(".L.return.%s:", fn->af_name);
         Gen_Emit("  mov %%rbp, %%rsp");
         Gen_Emit("  pop %%rbp");
         Gen_Emit("  ret");

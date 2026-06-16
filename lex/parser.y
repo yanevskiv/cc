@@ -32,17 +32,17 @@ static Ast_Function *prog_head, *prog_tail;
 
 static void add_param(Ast_Var *v)
 {
-    v->param_next = NULL;
+    v->av_param_next = NULL;
     if (!cur_params) cur_params = cur_params_tail = v;
-    else { cur_params_tail->param_next = v; cur_params_tail = v; }
+    else { cur_params_tail->av_param_next = v; cur_params_tail = v; }
     cur_nparams++;
 }
 
 static void add_function(Ast_Function *fn)
 {
-    fn->next = NULL;
+    fn->af_next = NULL;
     if (!prog_head) prog_head = prog_tail = fn;
-    else { prog_tail->next = fn; prog_tail = fn; }
+    else { prog_tail->af_next = fn; prog_tail = fn; }
     Ast_Program = prog_head;
 }
 %}
@@ -99,11 +99,11 @@ func_tail
     : compound_stmt
         {
             Ast_Function *fn = calloc(1, sizeof(Ast_Function));
-            fn->name      = cur_func_name;
-            fn->body      = $1;
-            fn->params    = cur_params;
-            fn->nparams   = cur_nparams;
-            fn->locals    = Ast_CurrentLocals();
+            fn->af_name    = cur_func_name;
+            fn->af_body    = $1;
+            fn->af_params  = cur_params;
+            fn->af_nparams = cur_nparams;
+            fn->af_locals  = Ast_CurrentLocals();
             add_function(fn);
         }
     | ';'   /* a prototype, e.g. `int printf(const char *, ...);` -- discard */
@@ -151,39 +151,39 @@ stars
 
 compound_stmt
     : '{' stmt_list '}'
-        { Ast_Node *n = Ast_NewNode(ND_BLOCK); n->body = $2; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_BLOCK); n->an_body = $2; $$ = n; }
     ;
 
 stmt_list
     : /* empty */          { $$ = NULL; }
-    | stmt stmt_list       { $1->next = $2; $$ = $1; }
+    | stmt stmt_list       { $1->an_next = $2; $$ = $1; }
     ;
 
 stmt
-    : RETURN expr ';'      { $$ = Ast_NewUnary(ND_RETURN, $2); }
-    | RETURN ';'           { $$ = Ast_NewUnary(ND_RETURN, NULL); }
+    : RETURN expr ';'      { $$ = Ast_NewUnary(AST_NODE_KIND_RETURN, $2); }
+    | RETURN ';'           { $$ = Ast_NewUnary(AST_NODE_KIND_RETURN, NULL); }
     | IF '(' expr ')' stmt %prec LOWER_THAN_ELSE
-        { Ast_Node *n = Ast_NewNode(ND_IF); n->cond = $3; n->then = $5; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_IF); n->an_cond = $3; n->an_then = $5; $$ = n; }
     | IF '(' expr ')' stmt ELSE stmt
-        { Ast_Node *n = Ast_NewNode(ND_IF); n->cond = $3; n->then = $5; n->els = $7; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_IF); n->an_cond = $3; n->an_then = $5; n->an_els = $7; $$ = n; }
     | FOR '(' expr_opt ';' expr_opt ';' expr_opt ')' stmt
-        { Ast_Node *n = Ast_NewNode(ND_FOR);
-          n->init = $3; n->cond = $5; n->inc = $7; n->body = $9; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_FOR);
+          n->an_init = $3; n->an_cond = $5; n->an_inc = $7; n->an_body = $9; $$ = n; }
     | WHILE '(' expr ')' stmt
-        { Ast_Node *n = Ast_NewNode(ND_FOR); n->cond = $3; n->body = $5; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_FOR); n->an_cond = $3; n->an_body = $5; $$ = n; }
     | compound_stmt        { $$ = $1; }
     | decl ';'             { $$ = $1; }
-    | expr ';'             { $$ = Ast_NewUnary(ND_EXPR_STMT, $1); }
-    | ';'                  { $$ = Ast_NewNode(ND_NOP); }
+    | expr ';'             { $$ = Ast_NewUnary(AST_NODE_KIND_EXPR_STMT, $1); }
+    | ';'                  { $$ = Ast_NewNode(AST_NODE_KIND_NOP); }
     ;
 
 decl
     : type_name IDENT
-        { Ast_DeclareVar($2); $$ = Ast_NewNode(ND_NOP); }
+        { Ast_DeclareVar($2); $$ = Ast_NewNode(AST_NODE_KIND_NOP); }
     | type_name IDENT '=' expr
         { Ast_Var *v = Ast_DeclareVar($2);
-          $$ = Ast_NewUnary(ND_EXPR_STMT,
-                            Ast_NewBinary(ND_ASSIGN, Ast_NewVarNode(v), $4)); }
+          $$ = Ast_NewUnary(AST_NODE_KIND_EXPR_STMT,
+                            Ast_NewBinary(AST_NODE_KIND_ASSIGN, Ast_NewVarNode(v), $4)); }
     ;
 
 expr_opt
@@ -195,33 +195,33 @@ expr_opt
 
 expr
     : NUM                  { $$ = Ast_NewNum($1); }
-    | STR                  { Ast_Node *n = Ast_NewNode(ND_STR);
-                             n->str_idx = Ast_AddString($1); $$ = n; }
+    | STR                  { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_STR);
+                             n->an_str_idx = Ast_AddString($1); $$ = n; }
     | IDENT
         { Ast_Var *v = Ast_FindVar($1);
           if (!v) error("use of undeclared identifier '%s'", $1);
           $$ = Ast_NewVarNode(v); }
     | IDENT '(' args ')'
-        { Ast_Node *n = Ast_NewNode(ND_CALL); n->funcname = $1; n->args = $3; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_CALL); n->an_funcname = $1; n->an_args = $3; $$ = n; }
     | '(' expr ')'         { $$ = $2; }
-    | expr '+' expr        { $$ = Ast_NewBinary(ND_ADD, $1, $3); }
-    | expr '-' expr        { $$ = Ast_NewBinary(ND_SUB, $1, $3); }
-    | expr '*' expr        { $$ = Ast_NewBinary(ND_MUL, $1, $3); }
-    | expr '/' expr        { $$ = Ast_NewBinary(ND_DIV, $1, $3); }
-    | expr '%' expr        { $$ = Ast_NewBinary(ND_MOD, $1, $3); }
-    | expr EQ expr         { $$ = Ast_NewBinary(ND_EQ, $1, $3); }
-    | expr NE expr         { $$ = Ast_NewBinary(ND_NE, $1, $3); }
-    | expr '<' expr        { $$ = Ast_NewBinary(ND_LT, $1, $3); }
-    | expr '>' expr        { $$ = Ast_NewBinary(ND_LT, $3, $1); }  /* a>b  == b<a  */
-    | expr LE expr         { $$ = Ast_NewBinary(ND_LE, $1, $3); }
-    | expr GE expr         { $$ = Ast_NewBinary(ND_LE, $3, $1); }  /* a>=b == b<=a */
-    | expr AND expr        { $$ = Ast_NewBinary(ND_AND, $1, $3); }
-    | expr OR expr         { $$ = Ast_NewBinary(ND_OR, $1, $3); }
+    | expr '+' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_ADD, $1, $3); }
+    | expr '-' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_SUB, $1, $3); }
+    | expr '*' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_MUL, $1, $3); }
+    | expr '/' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_DIV, $1, $3); }
+    | expr '%' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_MOD, $1, $3); }
+    | expr EQ expr         { $$ = Ast_NewBinary(AST_NODE_KIND_EQ, $1, $3); }
+    | expr NE expr         { $$ = Ast_NewBinary(AST_NODE_KIND_NE, $1, $3); }
+    | expr '<' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_LT, $1, $3); }
+    | expr '>' expr        { $$ = Ast_NewBinary(AST_NODE_KIND_LT, $3, $1); }  /* a>b  == b<a  */
+    | expr LE expr         { $$ = Ast_NewBinary(AST_NODE_KIND_LE, $1, $3); }
+    | expr GE expr         { $$ = Ast_NewBinary(AST_NODE_KIND_LE, $3, $1); }  /* a>=b == b<=a */
+    | expr AND expr        { $$ = Ast_NewBinary(AST_NODE_KIND_AND, $1, $3); }
+    | expr OR expr         { $$ = Ast_NewBinary(AST_NODE_KIND_OR, $1, $3); }
     | expr '=' expr
-        { if ($1->kind != ND_VAR) error("expression is not assignable");
-          $$ = Ast_NewBinary(ND_ASSIGN, $1, $3); }
-    | '-' expr %prec UMINUS { $$ = Ast_NewUnary(ND_NEG, $2); }
-    | '!' expr %prec UMINUS { $$ = Ast_NewUnary(ND_NOT, $2); }
+        { if ($1->an_kind != AST_NODE_KIND_VAR) error("expression is not assignable");
+          $$ = Ast_NewBinary(AST_NODE_KIND_ASSIGN, $1, $3); }
+    | '-' expr %prec UMINUS { $$ = Ast_NewUnary(AST_NODE_KIND_NEG, $2); }
+    | '!' expr %prec UMINUS { $$ = Ast_NewUnary(AST_NODE_KIND_NOT, $2); }
     ;
 
 args
@@ -231,7 +231,7 @@ args
 
 arg_list
     : expr                 { $$ = $1; }
-    | expr ',' arg_list    { $1->next = $3; $$ = $1; }
+    | expr ',' arg_list    { $1->an_next = $3; $$ = $1; }
     ;
 
 %%

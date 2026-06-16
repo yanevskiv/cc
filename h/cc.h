@@ -4,80 +4,89 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// Maximum number of distinct string literals in one translation unit.
+#define MAX_STRINGS 1024
+
+// Prints a diagnostic and exits; shared by the lexer, parser and back end.
+#define error(...)                      \
+    do {                                \
+        fprintf(stderr, "cc: error: "); \
+        fprintf(stderr, __VA_ARGS__);   \
+        fprintf(stderr, "\n");          \
+        exit(1);                        \
+    } while (0)
+
 // The kind of an AST node.
 typedef enum {
-    ND_NUM,       // integer literal
-    ND_STR,       // string literal
-    ND_VAR,       // a reference to a local variable
-    ND_ADD,       // lhs + rhs
-    ND_SUB,       // lhs - rhs
-    ND_MUL,       // lhs * rhs
-    ND_DIV,       // lhs / rhs
-    ND_MOD,       // lhs % rhs
-    ND_NEG,       // -lhs
-    ND_NOT,       // !lhs
-    ND_EQ,        // lhs == rhs
-    ND_NE,        // lhs != rhs
-    ND_LT,        // lhs <  rhs   (> is LT reversed)
-    ND_LE,        // lhs <= rhs   (>= is LE reversed)
-    ND_AND,       // lhs && rhs
-    ND_OR,        // lhs || rhs
-    ND_ASSIGN,    // lhs = rhs
-    ND_CALL,      // function call
-    ND_RETURN,    // return lhs;
-    ND_IF,        // if (cond) then; else els;
-    ND_FOR,       // for (init; cond; inc) body;
-    ND_BLOCK,     // { ... }
-    ND_EXPR_STMT, // expression used as a statement
-    ND_NOP        // empty statement / bare declaration
+    AST_NODE_KIND_NUM,       // integer literal
+    AST_NODE_KIND_STR,       // string literal
+    AST_NODE_KIND_VAR,       // a reference to a local variable
+    AST_NODE_KIND_ADD,       // lhs + rhs
+    AST_NODE_KIND_SUB,       // lhs - rhs
+    AST_NODE_KIND_MUL,       // lhs * rhs
+    AST_NODE_KIND_DIV,       // lhs / rhs
+    AST_NODE_KIND_MOD,       // lhs % rhs
+    AST_NODE_KIND_NEG,       // -lhs
+    AST_NODE_KIND_NOT,       // !lhs
+    AST_NODE_KIND_EQ,        // lhs == rhs
+    AST_NODE_KIND_NE,        // lhs != rhs
+    AST_NODE_KIND_LT,        // lhs <  rhs   (> is LT reversed)
+    AST_NODE_KIND_LE,        // lhs <= rhs   (>= is LE reversed)
+    AST_NODE_KIND_AND,       // lhs && rhs
+    AST_NODE_KIND_OR,        // lhs || rhs
+    AST_NODE_KIND_ASSIGN,    // lhs = rhs
+    AST_NODE_KIND_CALL,      // function call
+    AST_NODE_KIND_RETURN,    // return lhs;
+    AST_NODE_KIND_IF,        // if (cond) then; else els;
+    AST_NODE_KIND_FOR,       // for (init; cond; inc) body;
+    AST_NODE_KIND_BLOCK,     // { ... }
+    AST_NODE_KIND_EXPR_STMT, // expression used as a statement
+    AST_NODE_KIND_NOP        // empty statement / bare declaration
 } Ast_NodeKind;
 
 // A local variable or function parameter.
 typedef struct Ast_Var Ast_Var;
 struct Ast_Var {
-    Ast_Var *next;       // chains every local in a function
-    Ast_Var *param_next; // chains parameters in declaration order
-    char    *name;       // identifier as written in the source
-    int      offset;     // offset from %rbp, filled in by the back end
+    Ast_Var *av_next;       // chains every local in a function
+    Ast_Var *av_param_next; // chains parameters in declaration order
+    char    *av_name;       // identifier as written in the source
+    int      av_offset;     // offset from %rbp, filled in by the back end
 };
 
 // A node in the abstract syntax tree.
 typedef struct Ast_Node Ast_Node;
 struct Ast_Node {
-    Ast_NodeKind kind;     // which kind of node this is
-    Ast_Node    *next;     // next node in a statement / argument list
-    Ast_Node    *lhs;      // generic left operand
-    Ast_Node    *rhs;      // generic right operand
-    Ast_Node    *cond;     // condition of ND_IF / ND_FOR
-    Ast_Node    *then;     // then branch of ND_IF
-    Ast_Node    *els;      // else branch of ND_IF
-    Ast_Node    *init;     // initialiser of ND_FOR
-    Ast_Node    *inc;      // increment of ND_FOR
-    Ast_Node    *body;     // statement list for ND_BLOCK / ND_FOR body
-    char        *funcname; // callee name for ND_CALL
-    Ast_Node    *args;     // argument list for ND_CALL
-    long         val;      // integer value for ND_NUM
-    int          str_idx;  // string table slot for ND_STR
-    Ast_Var     *var;      // referenced variable for ND_VAR
+    Ast_NodeKind an_kind;     // which kind of node this is
+    Ast_Node    *an_next;     // next node in a statement / argument list
+    Ast_Node    *an_lhs;      // generic left operand
+    Ast_Node    *an_rhs;      // generic right operand
+    Ast_Node    *an_cond;     // condition of AST_NODE_KIND_IF / AST_NODE_KIND_FOR
+    Ast_Node    *an_then;     // then branch of AST_NODE_KIND_IF
+    Ast_Node    *an_els;      // else branch of AST_NODE_KIND_IF
+    Ast_Node    *an_init;     // initialiser of AST_NODE_KIND_FOR
+    Ast_Node    *an_inc;      // increment of AST_NODE_KIND_FOR
+    Ast_Node    *an_body;     // statement list for AST_NODE_KIND_BLOCK / FOR body
+    char        *an_funcname; // callee name for AST_NODE_KIND_CALL
+    Ast_Node    *an_args;     // argument list for AST_NODE_KIND_CALL
+    long         an_val;      // integer value for AST_NODE_KIND_NUM
+    int          an_str_idx;  // string table slot for AST_NODE_KIND_STR
+    Ast_Var     *an_var;      // referenced variable for AST_NODE_KIND_VAR
 };
 
 // A function definition.
 typedef struct Ast_Function Ast_Function;
 struct Ast_Function {
-    Ast_Function *next;       // next function in the program
-    char         *name;       // function name
-    Ast_Node     *body;       // function body (ND_BLOCK)
-    Ast_Var      *params;     // parameters, in declaration order
-    int           nparams;    // number of parameters
-    Ast_Var      *locals;     // every local, including parameters
-    int           stack_size; // frame size, filled in by the code generator
+    Ast_Function *af_next;       // next function in the program
+    char         *af_name;       // function name
+    Ast_Node     *af_body;       // function body (AST_NODE_KIND_BLOCK)
+    Ast_Var      *af_params;     // parameters, in declaration order
+    int           af_nparams;    // number of parameters
+    Ast_Var      *af_locals;     // every local, including parameters
+    int           af_stack_size; // frame size, filled in by the code generator
 };
 
 // The finished program, produced by the parser.
 extern Ast_Function *Ast_Program;
-
-// Maximum number of distinct string literals in one translation unit.
-#define MAX_STRINGS 1024
 
 // Interns a string literal and returns its table slot.
 int Ast_AddString(char *s);
@@ -108,15 +117,6 @@ Ast_Var *Ast_DeclareVar(const char *name);
 
 // Returns the list of locals declared in the current scope.
 Ast_Var *Ast_CurrentLocals(void);
-
-// Prints a diagnostic and exits; shared by the lexer, parser and back end.
-#define error(...)                      \
-    do {                                \
-        fprintf(stderr, "cc: error: "); \
-        fprintf(stderr, __VA_ARGS__);   \
-        fprintf(stderr, "\n");          \
-        exit(1);                        \
-    } while (0)
 
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
 void Gen_Codegen(FILE *out, Ast_Function *prog);
