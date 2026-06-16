@@ -20,7 +20,7 @@ static Ast_Var *Ast_Locals;
 // Destination stream for emitted assembly.
 static FILE *Gen_OutputFile;
 
-// Number of values currently pushed with Gen_Push().
+// Number of values currently pushed with Gen_EmitPush().
 static int Gen_Depth;
 
 // Source of unique label numbers.
@@ -117,7 +117,7 @@ Ast_Var *Ast_CurrentLocals(void)
 }
 
 // Writes one formatted line of assembly to the output.
-static void Gen_Emit(const char *fmt, ...)
+static void Gen_EmitLine(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -133,16 +133,16 @@ static int Gen_Count(void)
 }
 
 // Pushes %rax onto the stack and tracks the depth.
-static void Gen_Push(void)
+static void Gen_EmitPush(void)
 {
-    Gen_Emit("  push %%rax");
+    Gen_EmitLine("  push %%rax");
     Gen_Depth++;
 }
 
 // Pops the top of the stack into reg and tracks the depth.
-static void Gen_Pop(const char *reg)
+static void Gen_EmitPop(const char *reg)
 {
-    Gen_Emit("  pop %s", reg);
+    Gen_EmitLine("  pop %s", reg);
     Gen_Depth--;
 }
 
@@ -153,95 +153,95 @@ static int Gen_AlignTo(int n, int align)
 }
 
 // Computes the address of an lvalue into %rax.
-static void Gen_Addr(Ast_Node *node)
+static void Gen_EmitAddr(Ast_Node *node)
 {
     if (node->an_kind == AST_NODE_KIND_VAR) {
-        Gen_Emit("  lea %d(%%rbp), %%rax", node->an_var->av_offset);
+        Gen_EmitLine("  lea %d(%%rbp), %%rax", node->an_var->av_offset);
         return;
     }
     error("codegen: not an lvalue");
 }
 
 // Emits code for an expression, leaving its result in %rax.
-static void Gen_Expr(Ast_Node *node)
+static void Gen_EmitExpr(Ast_Node *node)
 {
     switch (node->an_kind) {
     case AST_NODE_KIND_NUM:
-        Gen_Emit("  mov $%ld, %%rax", node->an_val);
+        Gen_EmitLine("  mov $%ld, %%rax", node->an_val);
         return;
     case AST_NODE_KIND_STR:
-        Gen_Emit("  lea .Lstr%d(%%rip), %%rax", node->an_str_idx);
+        Gen_EmitLine("  lea .Lstr%d(%%rip), %%rax", node->an_str_idx);
         return;
     case AST_NODE_KIND_VAR:
-        Gen_Addr(node);
-        Gen_Emit("  mov (%%rax), %%rax");
+        Gen_EmitAddr(node);
+        Gen_EmitLine("  mov (%%rax), %%rax");
         return;
     case AST_NODE_KIND_ASSIGN:
-        Gen_Addr(node->an_lhs);
-        Gen_Push();
-        Gen_Expr(node->an_rhs);
-        Gen_Pop("%rdi");
-        Gen_Emit("  mov %%rax, (%%rdi)");
+        Gen_EmitAddr(node->an_lhs);
+        Gen_EmitPush();
+        Gen_EmitExpr(node->an_rhs);
+        Gen_EmitPop("%rdi");
+        Gen_EmitLine("  mov %%rax, (%%rdi)");
         return;
     case AST_NODE_KIND_NEG:
-        Gen_Expr(node->an_lhs);
-        Gen_Emit("  neg %%rax");
+        Gen_EmitExpr(node->an_lhs);
+        Gen_EmitLine("  neg %%rax");
         return;
     case AST_NODE_KIND_NOT:
-        Gen_Expr(node->an_lhs);
-        Gen_Emit("  cmp $0, %%rax");
-        Gen_Emit("  sete %%al");
-        Gen_Emit("  movzb %%al, %%rax");
+        Gen_EmitExpr(node->an_lhs);
+        Gen_EmitLine("  cmp $0, %%rax");
+        Gen_EmitLine("  sete %%al");
+        Gen_EmitLine("  movzb %%al, %%rax");
         return;
     case AST_NODE_KIND_AND: {
         int c = Gen_Count();
-        Gen_Expr(node->an_lhs);
-        Gen_Emit("  cmp $0, %%rax");
-        Gen_Emit("  je .L.false.%d", c);
-        Gen_Expr(node->an_rhs);
-        Gen_Emit("  cmp $0, %%rax");
-        Gen_Emit("  je .L.false.%d", c);
-        Gen_Emit("  mov $1, %%rax");
-        Gen_Emit("  jmp .L.end.%d", c);
-        Gen_Emit(".L.false.%d:", c);
-        Gen_Emit("  mov $0, %%rax");
-        Gen_Emit(".L.end.%d:", c);
+        Gen_EmitExpr(node->an_lhs);
+        Gen_EmitLine("  cmp $0, %%rax");
+        Gen_EmitLine("  je .L.false.%d", c);
+        Gen_EmitExpr(node->an_rhs);
+        Gen_EmitLine("  cmp $0, %%rax");
+        Gen_EmitLine("  je .L.false.%d", c);
+        Gen_EmitLine("  mov $1, %%rax");
+        Gen_EmitLine("  jmp .L.end.%d", c);
+        Gen_EmitLine(".L.false.%d:", c);
+        Gen_EmitLine("  mov $0, %%rax");
+        Gen_EmitLine(".L.end.%d:", c);
         return;
     }
     case AST_NODE_KIND_OR: {
         int c = Gen_Count();
-        Gen_Expr(node->an_lhs);
-        Gen_Emit("  cmp $0, %%rax");
-        Gen_Emit("  jne .L.true.%d", c);
-        Gen_Expr(node->an_rhs);
-        Gen_Emit("  cmp $0, %%rax");
-        Gen_Emit("  jne .L.true.%d", c);
-        Gen_Emit("  mov $0, %%rax");
-        Gen_Emit("  jmp .L.end.%d", c);
-        Gen_Emit(".L.true.%d:", c);
-        Gen_Emit("  mov $1, %%rax");
-        Gen_Emit(".L.end.%d:", c);
+        Gen_EmitExpr(node->an_lhs);
+        Gen_EmitLine("  cmp $0, %%rax");
+        Gen_EmitLine("  jne .L.true.%d", c);
+        Gen_EmitExpr(node->an_rhs);
+        Gen_EmitLine("  cmp $0, %%rax");
+        Gen_EmitLine("  jne .L.true.%d", c);
+        Gen_EmitLine("  mov $0, %%rax");
+        Gen_EmitLine("  jmp .L.end.%d", c);
+        Gen_EmitLine(".L.true.%d:", c);
+        Gen_EmitLine("  mov $1, %%rax");
+        Gen_EmitLine(".L.end.%d:", c);
         return;
     }
     case AST_NODE_KIND_CALL: {
         int nargs = 0;
         for (Ast_Node *a = node->an_args; a; a = a->an_next) {
-            Gen_Expr(a);
-            Gen_Push();
+            Gen_EmitExpr(a);
+            Gen_EmitPush();
             nargs++;
         }
         for (int i = nargs - 1; i >= 0; i--)
-            Gen_Pop(Gen_ArgReg[i]);
+            Gen_EmitPop(Gen_ArgReg[i]);
 
         // The ABI requires %rsp to be 16-byte aligned at the `call`.  Each
-        // outstanding Gen_Push() moved it by 8, so realign when depth is odd.
+        // outstanding Gen_EmitPush() moved it by 8, so realign when depth is odd.
         int realign = Gen_Depth % 2;
         if (realign)
-            Gen_Emit("  sub $8, %%rsp");
-        Gen_Emit("  mov $0, %%al"); // no vector regs for varargs
-        Gen_Emit("  call %s", node->an_funcname);
+            Gen_EmitLine("  sub $8, %%rsp");
+        Gen_EmitLine("  mov $0, %%al"); // no vector regs for varargs
+        Gen_EmitLine("  call %s", node->an_funcname);
         if (realign)
-            Gen_Emit("  add $8, %%rsp");
+            Gen_EmitLine("  add $8, %%rsp");
         return;
     }
     default:
@@ -249,28 +249,28 @@ static void Gen_Expr(Ast_Node *node)
     }
 
     // Binary operators: right operand spilled, left operand in %rax.
-    Gen_Expr(node->an_rhs);
-    Gen_Push();
-    Gen_Expr(node->an_lhs);
-    Gen_Pop("%rdi");
+    Gen_EmitExpr(node->an_rhs);
+    Gen_EmitPush();
+    Gen_EmitExpr(node->an_lhs);
+    Gen_EmitPop("%rdi");
     // now: %rax = lhs, %rdi = rhs
 
     switch (node->an_kind) {
-    case AST_NODE_KIND_ADD: Gen_Emit("  add %%rdi, %%rax"); return;
-    case AST_NODE_KIND_SUB: Gen_Emit("  sub %%rdi, %%rax"); return;
-    case AST_NODE_KIND_MUL: Gen_Emit("  imul %%rdi, %%rax"); return;
-    case AST_NODE_KIND_DIV: Gen_Emit("  cqo"); Gen_Emit("  idiv %%rdi"); return;
-    case AST_NODE_KIND_MOD: Gen_Emit("  cqo"); Gen_Emit("  idiv %%rdi"); Gen_Emit("  mov %%rdx, %%rax"); return;
+    case AST_NODE_KIND_ADD: Gen_EmitLine("  add %%rdi, %%rax"); return;
+    case AST_NODE_KIND_SUB: Gen_EmitLine("  sub %%rdi, %%rax"); return;
+    case AST_NODE_KIND_MUL: Gen_EmitLine("  imul %%rdi, %%rax"); return;
+    case AST_NODE_KIND_DIV: Gen_EmitLine("  cqo"); Gen_EmitLine("  idiv %%rdi"); return;
+    case AST_NODE_KIND_MOD: Gen_EmitLine("  cqo"); Gen_EmitLine("  idiv %%rdi"); Gen_EmitLine("  mov %%rdx, %%rax"); return;
     case AST_NODE_KIND_EQ:
     case AST_NODE_KIND_NE:
     case AST_NODE_KIND_LT:
     case AST_NODE_KIND_LE:
-        Gen_Emit("  cmp %%rdi, %%rax");
-        if      (node->an_kind == AST_NODE_KIND_EQ) Gen_Emit("  sete %%al");
-        else if (node->an_kind == AST_NODE_KIND_NE) Gen_Emit("  setne %%al");
-        else if (node->an_kind == AST_NODE_KIND_LT) Gen_Emit("  setl %%al");
-        else                                        Gen_Emit("  setle %%al");
-        Gen_Emit("  movzb %%al, %%rax");
+        Gen_EmitLine("  cmp %%rdi, %%rax");
+        if      (node->an_kind == AST_NODE_KIND_EQ) Gen_EmitLine("  sete %%al");
+        else if (node->an_kind == AST_NODE_KIND_NE) Gen_EmitLine("  setne %%al");
+        else if (node->an_kind == AST_NODE_KIND_LT) Gen_EmitLine("  setl %%al");
+        else                                        Gen_EmitLine("  setle %%al");
+        Gen_EmitLine("  movzb %%al, %%rax");
         return;
     default:
         error("codegen: unexpected node kind %d", node->an_kind);
@@ -278,52 +278,52 @@ static void Gen_Expr(Ast_Node *node)
 }
 
 // Emits code for a statement.
-static void Gen_Stmt(Ast_Node *node)
+static void Gen_EmitStmt(Ast_Node *node)
 {
     switch (node->an_kind) {
     case AST_NODE_KIND_RETURN:
         if (node->an_lhs)
-            Gen_Expr(node->an_lhs);
+            Gen_EmitExpr(node->an_lhs);
         else
-            Gen_Emit("  mov $0, %%rax");
-        Gen_Emit("  jmp .L.return.%s", Gen_CurFn);
+            Gen_EmitLine("  mov $0, %%rax");
+        Gen_EmitLine("  jmp .L.return.%s", Gen_CurFn);
         return;
     case AST_NODE_KIND_IF: {
         int c = Gen_Count();
-        Gen_Expr(node->an_cond);
-        Gen_Emit("  cmp $0, %%rax");
-        Gen_Emit("  je .L.else.%d", c);
-        Gen_Stmt(node->an_then);
-        Gen_Emit("  jmp .L.endif.%d", c);
-        Gen_Emit(".L.else.%d:", c);
+        Gen_EmitExpr(node->an_cond);
+        Gen_EmitLine("  cmp $0, %%rax");
+        Gen_EmitLine("  je .L.else.%d", c);
+        Gen_EmitStmt(node->an_then);
+        Gen_EmitLine("  jmp .L.endif.%d", c);
+        Gen_EmitLine(".L.else.%d:", c);
         if (node->an_els)
-            Gen_Stmt(node->an_els);
-        Gen_Emit(".L.endif.%d:", c);
+            Gen_EmitStmt(node->an_els);
+        Gen_EmitLine(".L.endif.%d:", c);
         return;
     }
     case AST_NODE_KIND_FOR: {
         int c = Gen_Count();
         if (node->an_init)
-            Gen_Expr(node->an_init);
-        Gen_Emit(".L.begin.%d:", c);
+            Gen_EmitExpr(node->an_init);
+        Gen_EmitLine(".L.begin.%d:", c);
         if (node->an_cond) {
-            Gen_Expr(node->an_cond);
-            Gen_Emit("  cmp $0, %%rax");
-            Gen_Emit("  je .L.endfor.%d", c);
+            Gen_EmitExpr(node->an_cond);
+            Gen_EmitLine("  cmp $0, %%rax");
+            Gen_EmitLine("  je .L.endfor.%d", c);
         }
-        Gen_Stmt(node->an_body);
+        Gen_EmitStmt(node->an_body);
         if (node->an_inc)
-            Gen_Expr(node->an_inc);
-        Gen_Emit("  jmp .L.begin.%d", c);
-        Gen_Emit(".L.endfor.%d:", c);
+            Gen_EmitExpr(node->an_inc);
+        Gen_EmitLine("  jmp .L.begin.%d", c);
+        Gen_EmitLine(".L.endfor.%d:", c);
         return;
     }
     case AST_NODE_KIND_BLOCK:
         for (Ast_Node *n = node->an_body; n; n = n->an_next)
-            Gen_Stmt(n);
+            Gen_EmitStmt(n);
         return;
     case AST_NODE_KIND_EXPR_STMT:
-        Gen_Expr(node->an_lhs);
+        Gen_EmitExpr(node->an_lhs);
         return;
     case AST_NODE_KIND_NOP:
         return;
@@ -344,50 +344,50 @@ static void Gen_AssignLvarOffsets(Ast_Function *fn)
 }
 
 // Emits the .rodata section holding all string literals.
-static void Gen_EmitData(void)
+static void Gen_EmitDataSection(void)
 {
     if (Ast_NumStrings == 0)
         return;
-    Gen_Emit("  .section .rodata");
+    Gen_EmitLine("  .section .rodata");
     for (int i = 0; i < Ast_NumStrings; i++) {
-        Gen_Emit(".Lstr%d:", i);
+        Gen_EmitLine(".Lstr%d:", i);
         // Emit raw bytes so that any contents survive intact.
         for (char *p = Ast_Strings[i]; *p; p++)
-            Gen_Emit("  .byte %d", (unsigned char)*p);
-        Gen_Emit("  .byte 0");
+            Gen_EmitLine("  .byte %d", (unsigned char)*p);
+        Gen_EmitLine("  .byte 0");
     }
 }
 
 // Emits the .text section: prologue, body and epilogue for each function.
-static void Gen_EmitText(Ast_Function *prog)
+static void Gen_EmitTextSection(Ast_Function *prog)
 {
-    Gen_Emit("  .text");
+    Gen_EmitLine("  .text");
     for (Ast_Function *fn = prog; fn; fn = fn->af_next) {
         Gen_AssignLvarOffsets(fn);
         Gen_CurFn = fn->af_name;
 
-        Gen_Emit("  .globl %s", fn->af_name);
-        Gen_Emit("%s:", fn->af_name);
+        Gen_EmitLine("  .globl %s", fn->af_name);
+        Gen_EmitLine("%s:", fn->af_name);
 
         // prologue
-        Gen_Emit("  push %%rbp");
-        Gen_Emit("  mov %%rsp, %%rbp");
+        Gen_EmitLine("  push %%rbp");
+        Gen_EmitLine("  mov %%rsp, %%rbp");
         if (fn->af_stack_size)
-            Gen_Emit("  sub $%d, %%rsp", fn->af_stack_size);
+            Gen_EmitLine("  sub $%d, %%rsp", fn->af_stack_size);
 
         // spill incoming parameters to their stack slots
         int i = 0;
         for (Ast_Var *p = fn->af_params; p; p = p->av_param_next)
-            Gen_Emit("  mov %s, %d(%%rbp)", Gen_ArgReg[i++], p->av_offset);
+            Gen_EmitLine("  mov %s, %d(%%rbp)", Gen_ArgReg[i++], p->av_offset);
 
-        Gen_Stmt(fn->af_body);
+        Gen_EmitStmt(fn->af_body);
 
         // epilogue (fall-through returns 0)
-        Gen_Emit("  mov $0, %%rax");
-        Gen_Emit(".L.return.%s:", fn->af_name);
-        Gen_Emit("  mov %%rbp, %%rsp");
-        Gen_Emit("  pop %%rbp");
-        Gen_Emit("  ret");
+        Gen_EmitLine("  mov $0, %%rax");
+        Gen_EmitLine(".L.return.%s:", fn->af_name);
+        Gen_EmitLine("  mov %%rbp, %%rsp");
+        Gen_EmitLine("  pop %%rbp");
+        Gen_EmitLine("  ret");
     }
 }
 
@@ -398,11 +398,11 @@ void Gen_Codegen(FILE *fp, Ast_Function *prog)
     Gen_Depth      = 0;
     Gen_LabelId    = 0;
 
-    Gen_Emit("  .file \"cc\"");
-    Gen_EmitData();
-    Gen_EmitText(prog);
+    Gen_EmitLine("  .file \"cc\"");
+    Gen_EmitDataSection();
+    Gen_EmitTextSection(prog);
     // Mark the stack as non-executable to silence the linker warning.
-    Gen_Emit("  .section .note.GNU-stack,\"\",@progbits");
+    Gen_EmitLine("  .section .note.GNU-stack,\"\",@progbits");
 }
 
 // Input stream read by the generated lexer.
