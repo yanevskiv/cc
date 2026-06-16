@@ -9,10 +9,28 @@
 Ast_Function *Ast_Program;
 
 // Table of interned string literals, indexed by ND_STR slot.
-char *Ast_Strings[MAX_STRINGS];
+static char *Ast_Strings[MAX_STRINGS];
 
 // Number of entries currently used in Ast_Strings.
-int Ast_NumStrings;
+static int Ast_NumStrings;
+
+// Locals of the function currently being parsed.
+static Ast_Var *Ast_Locals;
+
+// Destination stream for emitted assembly.
+static FILE *Gen_OutputFile;
+
+// Number of values currently pushed with Gen_Push().
+static int Gen_Depth;
+
+// Source of unique label numbers.
+static int Gen_LabelId;
+
+// Name of the function currently being emitted.
+static const char *Gen_CurFn;
+
+// Registers used to pass the first six integer arguments, in ABI order.
+static const char *Gen_ArgReg[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
 
 // Interns a string literal and returns its table slot.
 int Ast_AddString(char *s)
@@ -64,9 +82,6 @@ Ast_Node *Ast_NewVarNode(Ast_Var *var)
     return n;
 }
 
-// Locals of the function currently being parsed.
-static Ast_Var *Ast_Locals;
-
 // Starts a fresh variable scope for a new function.
 void Ast_BeginScope(void)
 {
@@ -101,33 +116,6 @@ Ast_Var *Ast_CurrentLocals(void)
     return Ast_Locals;
 }
 
-// Prints a diagnostic and exits; shared by the lexer, parser and back end.
-void error(const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    fputs("cc: error: ", stderr);
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
-    va_end(ap);
-    exit(1);
-}
-
-// Destination stream for emitted assembly.
-static FILE *Gen_OutputFile;
-
-// Number of values currently pushed with Gen_Push().
-static int Gen_Depth;
-
-// Source of unique label numbers.
-static int Gen_LabelId;
-
-// Name of the function currently being emitted.
-static const char *Gen_CurFn;
-
-// Registers used to pass the first six integer arguments, in ABI order.
-static const char *Gen_ArgReg[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
-
 // Writes one formatted line of assembly to the output.
 static void Gen_Emit(const char *fmt, ...)
 {
@@ -139,7 +127,10 @@ static void Gen_Emit(const char *fmt, ...)
 }
 
 // Returns the next unique label number.
-static int Gen_Count(void) { return Gen_LabelId++; }
+static int Gen_Count(void)
+{
+    return Gen_LabelId++;
+}
 
 // Pushes %rax onto the stack and tracks the depth.
 static void Gen_Push(void)
@@ -160,10 +151,6 @@ static int Gen_AlignTo(int n, int align)
 {
     return (n + align - 1) / align * align;
 }
-
-// Forward declarations for the mutually recursive generators below.
-static void Gen_Expr(Ast_Node *node);
-static void Gen_Stmt(Ast_Node *node);
 
 // Computes the address of an lvalue into %rax.
 static void Gen_Addr(Ast_Node *node)

@@ -2,6 +2,7 @@
 #define CC_H
 
 #include <stdio.h>
+#include <stdlib.h>
 
 // The kind of an AST node.
 typedef enum {
@@ -78,12 +79,6 @@ extern Ast_Function *Ast_Program;
 // Maximum number of distinct string literals in one translation unit.
 #define MAX_STRINGS 1024
 
-// Table of string literals, indexed by their ND_STR slot.
-extern char *Ast_Strings[MAX_STRINGS];
-
-// Number of entries currently used in Ast_Strings.
-extern int Ast_NumStrings;
-
 // Interns a string literal and returns its table slot.
 int Ast_AddString(char *s);
 
@@ -115,7 +110,13 @@ Ast_Var *Ast_DeclareVar(const char *name);
 Ast_Var *Ast_CurrentLocals(void);
 
 // Prints a diagnostic and exits; shared by the lexer, parser and back end.
-void error(const char *fmt, ...) __attribute__((noreturn));
+#define error(...)                      \
+    do {                                \
+        fprintf(stderr, "cc: error: "); \
+        fprintf(stderr, __VA_ARGS__);   \
+        fprintf(stderr, "\n");          \
+        exit(1);                        \
+    } while (0)
 
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
 void Gen_Codegen(FILE *out, Ast_Function *prog);
