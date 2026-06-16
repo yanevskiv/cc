@@ -9,28 +9,28 @@
  */
 
 %code requires {
-    #include "ast.h"
+    #include "cc.h"
 }
 
 %{
 #include <stdio.h>
 #include <stdlib.h>
-#include "ast.h"
+#include "cc.h"
 
 int  yylex(void);
 extern int yylineno;
 void yyerror(const char *s);
 
 /* State for the function definition currently being parsed. */
-static char *cur_func_name;
-static Var  *cur_params;
-static Var  *cur_params_tail;
-static int   cur_nparams;
+static char    *cur_func_name;
+static Ast_Var *cur_params;
+static Ast_Var *cur_params_tail;
+static int      cur_nparams;
 
 /* The program is assembled here as functions are reduced. */
-static Function *prog_head, *prog_tail;
+static Ast_Function *prog_head, *prog_tail;
 
-static void add_param(Var *v)
+static void add_param(Ast_Var *v)
 {
     v->param_next = NULL;
     if (!cur_params) cur_params = cur_params_tail = v;
@@ -38,19 +38,19 @@ static void add_param(Var *v)
     cur_nparams++;
 }
 
-static void add_function(Function *fn)
+static void add_function(Ast_Function *fn)
 {
     fn->next = NULL;
     if (!prog_head) prog_head = prog_tail = fn;
     else { prog_tail->next = fn; prog_tail = fn; }
-    program = prog_head;
+    Ast_Program = prog_head;
 }
 %}
 
 %union {
-    long  num;
-    char *str;
-    Node *node;
+    long      num;
+    char     *str;
+    Ast_Node *node;
 }
 
 %token <num> NUM
@@ -90,7 +90,7 @@ external_decl
             cur_params      = NULL;
             cur_params_tail = NULL;
             cur_nparams     = 0;
-            begin_scope();
+            Ast_BeginScope();
         }
       params ')' func_tail
     ;
@@ -98,12 +98,12 @@ external_decl
 func_tail
     : compound_stmt
         {
-            Function *fn  = calloc(1, sizeof(Function));
+            Ast_Function *fn = calloc(1, sizeof(Ast_Function));
             fn->name      = cur_func_name;
             fn->body      = $1;
             fn->params    = cur_params;
             fn->nparams   = cur_nparams;
-            fn->locals    = current_locals();
+            fn->locals    = Ast_CurrentLocals();
             add_function(fn);
         }
     | ';'   /* a prototype, e.g. `int printf(const char *, ...);` -- discard */
@@ -120,7 +120,7 @@ param_list
     ;
 
 param
-    : type_name IDENT   { add_param(declare_var($2)); }
+    : type_name IDENT   { add_param(Ast_DeclareVar($2)); }
     | type_name         /* unnamed parameter, e.g. `void` */
     | ELLIPSIS          /* variadic marker, ignored */
     ;
@@ -151,7 +151,7 @@ stars
 
 compound_stmt
     : '{' stmt_list '}'
-        { Node *n = new_node(ND_BLOCK); n->body = $2; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(ND_BLOCK); n->body = $2; $$ = n; }
     ;
 
 stmt_list
@@ -160,30 +160,30 @@ stmt_list
     ;
 
 stmt
-    : RETURN expr ';'      { $$ = new_unary(ND_RETURN, $2); }
-    | RETURN ';'           { $$ = new_unary(ND_RETURN, NULL); }
+    : RETURN expr ';'      { $$ = Ast_NewUnary(ND_RETURN, $2); }
+    | RETURN ';'           { $$ = Ast_NewUnary(ND_RETURN, NULL); }
     | IF '(' expr ')' stmt %prec LOWER_THAN_ELSE
-        { Node *n = new_node(ND_IF); n->cond = $3; n->then = $5; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(ND_IF); n->cond = $3; n->then = $5; $$ = n; }
     | IF '(' expr ')' stmt ELSE stmt
-        { Node *n = new_node(ND_IF); n->cond = $3; n->then = $5; n->els = $7; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(ND_IF); n->cond = $3; n->then = $5; n->els = $7; $$ = n; }
     | FOR '(' expr_opt ';' expr_opt ';' expr_opt ')' stmt
-        { Node *n = new_node(ND_FOR);
+        { Ast_Node *n = Ast_NewNode(ND_FOR);
           n->init = $3; n->cond = $5; n->inc = $7; n->body = $9; $$ = n; }
     | WHILE '(' expr ')' stmt
-        { Node *n = new_node(ND_FOR); n->cond = $3; n->body = $5; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(ND_FOR); n->cond = $3; n->body = $5; $$ = n; }
     | compound_stmt        { $$ = $1; }
     | decl ';'             { $$ = $1; }
-    | expr ';'             { $$ = new_unary(ND_EXPR_STMT, $1); }
-    | ';'                  { $$ = new_node(ND_NOP); }
+    | expr ';'             { $$ = Ast_NewUnary(ND_EXPR_STMT, $1); }
+    | ';'                  { $$ = Ast_NewNode(ND_NOP); }
     ;
 
 decl
     : type_name IDENT
-        { declare_var($2); $$ = new_node(ND_NOP); }
+        { Ast_DeclareVar($2); $$ = Ast_NewNode(ND_NOP); }
     | type_name IDENT '=' expr
-        { Var *v = declare_var($2);
-          $$ = new_unary(ND_EXPR_STMT,
-                         new_binary(ND_ASSIGN, new_var_node(v), $4)); }
+        { Ast_Var *v = Ast_DeclareVar($2);
+          $$ = Ast_NewUnary(ND_EXPR_STMT,
+                            Ast_NewBinary(ND_ASSIGN, Ast_NewVarNode(v), $4)); }
     ;
 
 expr_opt
@@ -194,34 +194,34 @@ expr_opt
 /* ---- expressions --------------------------------------------------- */
 
 expr
-    : NUM                  { $$ = new_num($1); }
-    | STR                  { Node *n = new_node(ND_STR);
-                             n->str_idx = add_string($1); $$ = n; }
+    : NUM                  { $$ = Ast_NewNum($1); }
+    | STR                  { Ast_Node *n = Ast_NewNode(ND_STR);
+                             n->str_idx = Ast_AddString($1); $$ = n; }
     | IDENT
-        { Var *v = find_var($1);
+        { Ast_Var *v = Ast_FindVar($1);
           if (!v) error("use of undeclared identifier '%s'", $1);
-          $$ = new_var_node(v); }
+          $$ = Ast_NewVarNode(v); }
     | IDENT '(' args ')'
-        { Node *n = new_node(ND_CALL); n->funcname = $1; n->args = $3; $$ = n; }
+        { Ast_Node *n = Ast_NewNode(ND_CALL); n->funcname = $1; n->args = $3; $$ = n; }
     | '(' expr ')'         { $$ = $2; }
-    | expr '+' expr        { $$ = new_binary(ND_ADD, $1, $3); }
-    | expr '-' expr        { $$ = new_binary(ND_SUB, $1, $3); }
-    | expr '*' expr        { $$ = new_binary(ND_MUL, $1, $3); }
-    | expr '/' expr        { $$ = new_binary(ND_DIV, $1, $3); }
-    | expr '%' expr        { $$ = new_binary(ND_MOD, $1, $3); }
-    | expr EQ expr         { $$ = new_binary(ND_EQ, $1, $3); }
-    | expr NE expr         { $$ = new_binary(ND_NE, $1, $3); }
-    | expr '<' expr        { $$ = new_binary(ND_LT, $1, $3); }
-    | expr '>' expr        { $$ = new_binary(ND_LT, $3, $1); }  /* a>b  == b<a  */
-    | expr LE expr         { $$ = new_binary(ND_LE, $1, $3); }
-    | expr GE expr         { $$ = new_binary(ND_LE, $3, $1); }  /* a>=b == b<=a */
-    | expr AND expr        { $$ = new_binary(ND_AND, $1, $3); }
-    | expr OR expr         { $$ = new_binary(ND_OR, $1, $3); }
+    | expr '+' expr        { $$ = Ast_NewBinary(ND_ADD, $1, $3); }
+    | expr '-' expr        { $$ = Ast_NewBinary(ND_SUB, $1, $3); }
+    | expr '*' expr        { $$ = Ast_NewBinary(ND_MUL, $1, $3); }
+    | expr '/' expr        { $$ = Ast_NewBinary(ND_DIV, $1, $3); }
+    | expr '%' expr        { $$ = Ast_NewBinary(ND_MOD, $1, $3); }
+    | expr EQ expr         { $$ = Ast_NewBinary(ND_EQ, $1, $3); }
+    | expr NE expr         { $$ = Ast_NewBinary(ND_NE, $1, $3); }
+    | expr '<' expr        { $$ = Ast_NewBinary(ND_LT, $1, $3); }
+    | expr '>' expr        { $$ = Ast_NewBinary(ND_LT, $3, $1); }  /* a>b  == b<a  */
+    | expr LE expr         { $$ = Ast_NewBinary(ND_LE, $1, $3); }
+    | expr GE expr         { $$ = Ast_NewBinary(ND_LE, $3, $1); }  /* a>=b == b<=a */
+    | expr AND expr        { $$ = Ast_NewBinary(ND_AND, $1, $3); }
+    | expr OR expr         { $$ = Ast_NewBinary(ND_OR, $1, $3); }
     | expr '=' expr
         { if ($1->kind != ND_VAR) error("expression is not assignable");
-          $$ = new_binary(ND_ASSIGN, $1, $3); }
-    | '-' expr %prec UMINUS { $$ = new_unary(ND_NEG, $2); }
-    | '!' expr %prec UMINUS { $$ = new_unary(ND_NOT, $2); }
+          $$ = Ast_NewBinary(ND_ASSIGN, $1, $3); }
+    | '-' expr %prec UMINUS { $$ = Ast_NewUnary(ND_NEG, $2); }
+    | '!' expr %prec UMINUS { $$ = Ast_NewUnary(ND_NOT, $2); }
     ;
 
 args
