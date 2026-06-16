@@ -1,14 +1,3 @@
-/* cc.c - the cc compiler in a single translation unit.
- *
- * Three sections, formerly three files:
- *   Ast_*   AST/variable constructors, the string table and the per-function
- *           variable scope used by the parser actions.
- *   Gen_*   the x86-64 back end (System V AMD64 ABI, AT&T syntax).
- *   main    the command line driver.
- *
- * Pipeline:   source.c --[flex+bison]--> AST --[Gen_Codegen]--> x86-64 asm
- *                       --[system assembler+linker]--> executable
- */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,19 +5,16 @@
 #include <unistd.h>
 #include "cc.h"
 
-/* ================================================================== */
-/* AST: constructors, string table, scope and diagnostics            */
-/* ================================================================== */
-
-/* The finished program, filled in by the parser. */
+// The finished program, filled in by the parser.
 Ast_Function *Ast_Program;
 
-/* ------------------------------------------------------------------ */
-/* String literal table                                               */
-/* ------------------------------------------------------------------ */
+// Table of interned string literals, indexed by ND_STR slot.
 char *Ast_Strings[MAX_STRINGS];
-int   Ast_NumStrings;
 
+// Number of entries currently used in Ast_Strings.
+int Ast_NumStrings;
+
+// Interns a string literal and returns its table slot.
 int Ast_AddString(char *s)
 {
     if (Ast_NumStrings >= MAX_STRINGS)
@@ -37,9 +23,7 @@ int Ast_AddString(char *s)
     return Ast_NumStrings++;
 }
 
-/* ------------------------------------------------------------------ */
-/* Node constructors                                                  */
-/* ------------------------------------------------------------------ */
+// Allocates a zeroed node of the given kind.
 Ast_Node *Ast_NewNode(Ast_NodeKind kind)
 {
     Ast_Node *n = calloc(1, sizeof(Ast_Node));
@@ -47,6 +31,7 @@ Ast_Node *Ast_NewNode(Ast_NodeKind kind)
     return n;
 }
 
+// Builds a binary-operator node with the given operands.
 Ast_Node *Ast_NewBinary(Ast_NodeKind kind, Ast_Node *lhs, Ast_Node *rhs)
 {
     Ast_Node *n = Ast_NewNode(kind);
@@ -55,6 +40,7 @@ Ast_Node *Ast_NewBinary(Ast_NodeKind kind, Ast_Node *lhs, Ast_Node *rhs)
     return n;
 }
 
+// Builds a unary-operator node with the given operand.
 Ast_Node *Ast_NewUnary(Ast_NodeKind kind, Ast_Node *lhs)
 {
     Ast_Node *n = Ast_NewNode(kind);
@@ -62,6 +48,7 @@ Ast_Node *Ast_NewUnary(Ast_NodeKind kind, Ast_Node *lhs)
     return n;
 }
 
+// Builds an integer-literal node.
 Ast_Node *Ast_NewNum(long val)
 {
     Ast_Node *n = Ast_NewNode(ND_NUM);
@@ -69,6 +56,7 @@ Ast_Node *Ast_NewNum(long val)
     return n;
 }
 
+// Builds a node that references a local variable.
 Ast_Node *Ast_NewVarNode(Ast_Var *var)
 {
     Ast_Node *n = Ast_NewNode(ND_VAR);
@@ -76,16 +64,16 @@ Ast_Node *Ast_NewVarNode(Ast_Var *var)
     return n;
 }
 
-/* ------------------------------------------------------------------ */
-/* Per-function variable scope                                        */
-/* ------------------------------------------------------------------ */
-static Ast_Var *Ast_Locals;   /* locals of the function being parsed */
+// Locals of the function currently being parsed.
+static Ast_Var *Ast_Locals;
 
+// Starts a fresh variable scope for a new function.
 void Ast_BeginScope(void)
 {
     Ast_Locals = NULL;
 }
 
+// Looks up a variable by name in the current scope, or NULL.
 Ast_Var *Ast_FindVar(const char *name)
 {
     for (Ast_Var *v = Ast_Locals; v; v = v->next)
@@ -94,11 +82,12 @@ Ast_Var *Ast_FindVar(const char *name)
     return NULL;
 }
 
+// Declares a variable in the current scope, reusing any existing slot.
 Ast_Var *Ast_DeclareVar(const char *name)
 {
     Ast_Var *v = Ast_FindVar(name);
     if (v)
-        return v;            /* re-declaration: reuse the existing slot */
+        return v; // re-declaration: reuse the existing slot
     v = calloc(1, sizeof(Ast_Var));
     v->name    = strdup(name);
     v->next    = Ast_Locals;
@@ -106,14 +95,13 @@ Ast_Var *Ast_DeclareVar(const char *name)
     return v;
 }
 
+// Returns the list of locals declared in the current scope.
 Ast_Var *Ast_CurrentLocals(void)
 {
     return Ast_Locals;
 }
 
-/* ------------------------------------------------------------------ */
-/* Diagnostics                                                        */
-/* ------------------------------------------------------------------ */
+// Prints a diagnostic and exits; shared by the lexer, parser and back end.
 void error(const char *fmt, ...)
 {
     va_list ap;
@@ -125,23 +113,22 @@ void error(const char *fmt, ...)
     exit(1);
 }
 
-/* ================================================================== */
-/* Code generator                                                    */
-/*                                                                    */
-/* The strategy is the classic "stack machine": every expression     */
-/* leaves its result in %rax, and temporaries are spilled to the      */
-/* hardware stack with push/pop.  It is not fast code, but it is      */
-/* small and easy to follow -- the point of this base is clarity,     */
-/* not optimisation.                                                  */
-/* ================================================================== */
+// Destination stream for emitted assembly.
+static FILE *Gen_OutputFile;
 
-static FILE       *Gen_OutputFile;
-static int         Gen_Depth;     /* number of values currently Gen_Push()ed */
-static int         Gen_LabelId;   /* source of unique label numbers          */
-static const char *Gen_CurFn;     /* name of the function being emitted       */
+// Number of values currently pushed with Gen_Push().
+static int Gen_Depth;
 
+// Source of unique label numbers.
+static int Gen_LabelId;
+
+// Name of the function currently being emitted.
+static const char *Gen_CurFn;
+
+// Registers used to pass the first six integer arguments, in ABI order.
 static const char *Gen_ArgReg[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
 
+// Writes one formatted line of assembly to the output.
 static void Gen_Emit(const char *fmt, ...)
 {
     va_list ap;
@@ -151,29 +138,34 @@ static void Gen_Emit(const char *fmt, ...)
     fputc('\n', Gen_OutputFile);
 }
 
+// Returns the next unique label number.
 static int Gen_Count(void) { return Gen_LabelId++; }
 
+// Pushes %rax onto the stack and tracks the depth.
 static void Gen_Push(void)
 {
     Gen_Emit("  push %%rax");
     Gen_Depth++;
 }
 
+// Pops the top of the stack into reg and tracks the depth.
 static void Gen_Pop(const char *reg)
 {
     Gen_Emit("  pop %s", reg);
     Gen_Depth--;
 }
 
+// Rounds n up to the nearest multiple of align.
 static int Gen_AlignTo(int n, int align)
 {
     return (n + align - 1) / align * align;
 }
 
+// Forward declarations for the mutually recursive generators below.
 static void Gen_Expr(Ast_Node *node);
 static void Gen_Stmt(Ast_Node *node);
 
-/* Compute the address of an lvalue into %rax. */
+// Computes the address of an lvalue into %rax.
 static void Gen_Addr(Ast_Node *node)
 {
     if (node->kind == ND_VAR) {
@@ -183,6 +175,7 @@ static void Gen_Addr(Ast_Node *node)
     error("codegen: not an lvalue");
 }
 
+// Emits code for an expression, leaving its result in %rax.
 static void Gen_Expr(Ast_Node *node)
 {
     switch (node->kind) {
@@ -253,12 +246,12 @@ static void Gen_Expr(Ast_Node *node)
         for (int i = nargs - 1; i >= 0; i--)
             Gen_Pop(Gen_ArgReg[i]);
 
-        /* The ABI requires %rsp to be 16-byte aligned at the `call`.  Each
-         * outstanding Gen_Push() moved it by 8, so realign when depth is odd. */
+        // The ABI requires %rsp to be 16-byte aligned at the `call`.  Each
+        // outstanding Gen_Push() moved it by 8, so realign when depth is odd.
         int realign = Gen_Depth % 2;
         if (realign)
             Gen_Emit("  sub $8, %%rsp");
-        Gen_Emit("  mov $0, %%al");          /* no vector regs for varargs */
+        Gen_Emit("  mov $0, %%al"); // no vector regs for varargs
         Gen_Emit("  call %s", node->funcname);
         if (realign)
             Gen_Emit("  add $8, %%rsp");
@@ -268,12 +261,12 @@ static void Gen_Expr(Ast_Node *node)
         break;
     }
 
-    /* Binary operators: right operand spilled, left operand in %rax. */
+    // Binary operators: right operand spilled, left operand in %rax.
     Gen_Expr(node->rhs);
     Gen_Push();
     Gen_Expr(node->lhs);
     Gen_Pop("%rdi");
-    /* now: %rax = lhs, %rdi = rhs */
+    // now: %rax = lhs, %rdi = rhs
 
     switch (node->kind) {
     case ND_ADD: Gen_Emit("  add %%rdi, %%rax"); return;
@@ -297,6 +290,7 @@ static void Gen_Expr(Ast_Node *node)
     }
 }
 
+// Emits code for a statement.
 static void Gen_Stmt(Ast_Node *node)
 {
     switch (node->kind) {
@@ -351,6 +345,7 @@ static void Gen_Stmt(Ast_Node *node)
     }
 }
 
+// Assigns each local a stack slot and records the frame size.
 static void Gen_AssignLvarOffsets(Ast_Function *fn)
 {
     int offset = 0;
@@ -361,6 +356,7 @@ static void Gen_AssignLvarOffsets(Ast_Function *fn)
     fn->stack_size = Gen_AlignTo(offset, 16);
 }
 
+// Emits the .rodata section holding all string literals.
 static void Gen_EmitData(void)
 {
     if (Ast_NumStrings == 0)
@@ -368,13 +364,14 @@ static void Gen_EmitData(void)
     Gen_Emit("  .section .rodata");
     for (int i = 0; i < Ast_NumStrings; i++) {
         Gen_Emit(".Lstr%d:", i);
-        /* Emit raw bytes so that any contents survive intact. */
+        // Emit raw bytes so that any contents survive intact.
         for (char *p = Ast_Strings[i]; *p; p++)
             Gen_Emit("  .byte %d", (unsigned char)*p);
         Gen_Emit("  .byte 0");
     }
 }
 
+// Emits the .text section: prologue, body and epilogue for each function.
 static void Gen_EmitText(Ast_Function *prog)
 {
     Gen_Emit("  .text");
@@ -385,20 +382,20 @@ static void Gen_EmitText(Ast_Function *prog)
         Gen_Emit("  .globl %s", fn->name);
         Gen_Emit("%s:", fn->name);
 
-        /* prologue */
+        // prologue
         Gen_Emit("  push %%rbp");
         Gen_Emit("  mov %%rsp, %%rbp");
         if (fn->stack_size)
             Gen_Emit("  sub $%d, %%rsp", fn->stack_size);
 
-        /* spill incoming parameters to their stack slots */
+        // spill incoming parameters to their stack slots
         int i = 0;
         for (Ast_Var *p = fn->params; p; p = p->param_next)
             Gen_Emit("  mov %s, %d(%%rbp)", Gen_ArgReg[i++], p->offset);
 
         Gen_Stmt(fn->body);
 
-        /* epilogue (fall-through returns 0) */
+        // epilogue (fall-through returns 0)
         Gen_Emit("  mov $0, %%rax");
         Gen_Emit(".L.return.%s:", fn->name);
         Gen_Emit("  mov %%rbp, %%rsp");
@@ -407,6 +404,7 @@ static void Gen_EmitText(Ast_Function *prog)
     }
 }
 
+// Emits assembly for the whole program to fp.
 void Gen_Codegen(FILE *fp, Ast_Function *prog)
 {
     Gen_OutputFile = fp;
@@ -416,23 +414,17 @@ void Gen_Codegen(FILE *fp, Ast_Function *prog)
     Gen_Emit("  .file \"cc\"");
     Gen_EmitData();
     Gen_EmitText(prog);
-    /* Mark the stack as non-executable to silence the linker warning. */
+    // Mark the stack as non-executable to silence the linker warning.
     Gen_Emit("  .section .note.GNU-stack,\"\",@progbits");
 }
 
-/* ================================================================== */
-/* main: command line driver                                         */
-/*                                                                    */
-/* The lexer and parser do the real compiler work; an external        */
-/* assembler/linker (gcc by default, overridable with $CC) turns our  */
-/* assembly into an ELF binary and pulls in the C runtime.  This      */
-/* mirrors how small compilers such as tcc's early versions or        */
-/* chibicc bootstrap themselves.                                      */
-/* ================================================================== */
-
+// Input stream read by the generated lexer.
 extern FILE *yyin;
-int          yyparse(void);
 
+// Entry point of the generated parser; fills in Ast_Program.
+int yyparse(void);
+
+// Prints usage information and exits.
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -443,6 +435,7 @@ static void usage(const char *prog)
     exit(1);
 }
 
+// Compiler entry point: parse arguments, build the AST, emit and link.
 int main(int argc, char **argv)
 {
     const char *input    = NULL;
@@ -468,7 +461,7 @@ int main(int argc, char **argv)
     if (!output)
         output = asm_only ? "out.s" : "a.out";
 
-    /* ---- front end: build the AST ---- */
+    // front end: build the AST
     yyin = fopen(input, "r");
     if (!yyin) {
         perror(input);
@@ -477,7 +470,7 @@ int main(int argc, char **argv)
     yyparse();
     fclose(yyin);
 
-    /* ---- back end: emit assembly ---- */
+    // back end: emit assembly
     char *asmpath;
     if (asm_only) {
         asmpath = strdup(output);
@@ -497,7 +490,7 @@ int main(int argc, char **argv)
     if (asm_only)
         return 0;
 
-    /* ---- assemble + link with the system C toolchain ---- */
+    // assemble + link with the system C toolchain
     const char *driver = getenv("CC");
     if (!driver || !*driver)
         driver = "gcc";
