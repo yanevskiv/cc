@@ -74,19 +74,19 @@ struct Ast_Node {
 };
 
 // A function definition.
-typedef struct Ast_Function Ast_Function;
-struct Ast_Function {
-    Ast_Function *af_next;       // next function in the program
-    char         *af_name;       // function name
-    Ast_Node     *af_body;       // function body (AST_NODE_KIND_BLOCK)
-    Ast_Var      *af_params;     // parameters, in declaration order
-    int           af_nparams;    // number of parameters
-    Ast_Var      *af_locals;     // every local, including parameters
-    int           af_stack_size; // frame size, filled in by the code generator
+typedef struct Ast_Func Ast_Func;
+struct Ast_Func {
+    Ast_Func *af_next;       // next function in the program
+    char     *af_name;       // function name
+    Ast_Node *af_body;       // function body (AST_NODE_KIND_BLOCK)
+    Ast_Var  *af_params;     // parameters, in declaration order
+    int       af_nparams;    // number of parameters
+    Ast_Var  *af_locals;     // every local, including parameters
+    int       af_stack_size; // frame size, filled in by the code generator
 };
 
 // The finished program, produced by the parser.
-extern Ast_Function *Ast_Program;
+extern Ast_Func *Ast_Program;
 
 // Interns a string literal and returns its table slot.
 int Ast_AddString(char *s);
@@ -119,6 +119,6 @@ Ast_Var *Ast_DeclareVar(const char *name);
 Ast_Var *Ast_CurrentLocals(void);
 
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
-void Gen_Codegen(FILE *out, Ast_Function *prog);
+void Gen_Codegen(FILE *out, Ast_Func *prog);
 
 #endif // CC_H

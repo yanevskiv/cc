@@ -6,7 +6,7 @@
 #include "cc.h"
 
 // The finished program, filled in by the parser.
-Ast_Function *Ast_Program;
+Ast_Func *Ast_Program;
 
 // Table of interned string literals, indexed by AST_NODE_KIND_STR slot.
 static char *Ast_Strings[MAX_STRINGS];
@@ -27,7 +27,7 @@ static int Gen_Depth;
 static int Gen_LabelId;
 
 // Name of the function currently being emitted.
-static const char *Gen_CurFn;
+static const char *Gen_CurrFunc;
 
 // Registers used to pass the first six integer arguments, in ABI order.
 static const char *Gen_ArgReg[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
@@ -313,7 +313,7 @@ static void Gen_EmitStmt(Ast_Node *node)
             } else {
                 Gen_EmitLine("  mov $0, %%rax");
             }
-            Gen_EmitLine("  jmp .L.return.%s", Gen_CurFn);
+            Gen_EmitLine("  jmp .L.return.%s", Gen_CurrFunc);
         } break;
         case AST_NODE_KIND_IF: {
             int count = Gen_Count();
@@ -364,7 +364,7 @@ static void Gen_EmitStmt(Ast_Node *node)
 }
 
 // Assigns each local a stack slot and records the frame size.
-static void Gen_AssignLvarOffsets(Ast_Function *func)
+static void Gen_AssignLvarOffsets(Ast_Func *func)
 {
     int offset = 0;
     for (Ast_Var *var = func->af_locals; var; var = var->av_next) {
@@ -392,12 +392,12 @@ static void Gen_EmitDataSection(void)
 }
 
 // Emits the .text section: prologue, body and epilogue for each function.
-static void Gen_EmitTextSection(Ast_Function *prog)
+static void Gen_EmitTextSection(Ast_Func *prog)
 {
     Gen_EmitLine("  .text");
-    for (Ast_Function *func = prog; func; func = func->af_next) {
+    for (Ast_Func *func = prog; func; func = func->af_next) {
         Gen_AssignLvarOffsets(func);
-        Gen_CurFn = func->af_name;
+        Gen_CurrFunc = func->af_name;
 
         Gen_EmitLine("  .globl %s", func->af_name);
         Gen_EmitLine("%s:", func->af_name);
@@ -427,7 +427,7 @@ static void Gen_EmitTextSection(Ast_Function *prog)
 }
 
 // Emits assembly for the whole program to out.
-void Gen_Codegen(FILE *out, Ast_Function *prog)
+void Gen_Codegen(FILE *out, Ast_Func *prog)
 {
     Gen_OutputFile = out;
     Gen_Depth      = 0;

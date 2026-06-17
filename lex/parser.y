@@ -28,7 +28,7 @@ static Ast_Var *cur_params_tail;
 static int      cur_nparams;
 
 /* The program is assembled here as functions are reduced. */
-static Ast_Function *prog_head, *prog_tail;
+static Ast_Func *prog_head, *prog_tail;
 
 static void add_param(Ast_Var *v)
 {
@@ -38,7 +38,7 @@ static void add_param(Ast_Var *v)
     cur_nparams++;
 }
 
-static void add_function(Ast_Function *fn)
+static void add_function(Ast_Func *fn)
 {
     fn->af_next = NULL;
     if (!prog_head) prog_head = prog_tail = fn;
@@ -98,7 +98,7 @@ external_decl
 func_tail
     : compound_stmt
         {
-            Ast_Function *fn = calloc(1, sizeof(Ast_Function));
+            Ast_Func *fn = calloc(1, sizeof(Ast_Func));
             fn->af_name    = cur_func_name;
             fn->af_body    = $1;
             fn->af_params  = cur_params;
