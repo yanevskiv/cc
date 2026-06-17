@@ -1,3 +1,4 @@
+#include <getopt.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -446,95 +447,87 @@ extern FILE *yyin;
 // Entry point of the generated parser; fills in Ast_Program.
 int yyparse(void);
 
-// Prints usage information and exits.
-static void usage(const char *prog)
+// Show usage information and exits.
+static void Show_Usage(const char *prog)
 {
     fprintf(stderr,
-        "usage: %s [-S] [-o OUTPUT] INPUT.c\n"
-        "  -S          emit assembly only (do not assemble or link)\n"
-        "  -o OUTPUT   write the result to OUTPUT (default: a.out / out.s)\n",
+        "Usage: %s [-o OUTPUT] INPUT.c\n"
+        "  -o OUTPUT   write assembly to OUTPUT (default: INPUT.s)\n",
         prog);
     exit(1);
 }
 
-// Compiler entry point: parse arguments, build the AST, emit and link.
+// Change or append extension ('main.c' -> 'main.s').  
+static char *Str_ChangeOrAppendExt(const char *input, const char *suffix)
+{
+    const char *slash = strrchr(input, '/');
+    const char *dot   = strrchr(input, '.');
+
+    // Only a '.' in the final path component counts as an extension separator,
+    // so a dot in a directory name ('a.b/main') is not mistaken for one.
+    if (!dot || (slash && dot < slash)) {
+        dot = NULL;
+    }
+
+    size_t stem = dot ? (size_t)(dot - input) : strlen(input);
+    size_t slen = strlen(suffix);
+    char  *out  = malloc(stem + slen + 1);
+    memcpy(out, input, stem);
+    memcpy(out + stem, suffix, slen + 1); // copy suffix including its NUL
+    return out;
+}
+
+// Main function
 int main(int argc, char **argv)
 {
-    const char *input    = NULL;
-    const char *output   = NULL;
-    int         asm_only = 0;
+    const char *output = NULL;
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-S") == 0) {
-            asm_only = 1;
-        } else if (strcmp(argv[i], "-o") == 0) {
-            if (++i >= argc) {
-                usage(argv[0]);
-            }
-            output = argv[i];
-        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
-            fprintf(stderr, "cc: unknown option '%s'\n", argv[i]);
-            usage(argv[0]);
-        } else {
-            input = argv[i];
+    int opt;
+    while ((opt = getopt(argc, argv, "o:")) != -1) {
+        switch (opt) {
+            case 'o': {
+                output = optarg;
+            } break;
+            default: {
+                Show_Usage(argv[0]);
+            } break;
         }
     }
 
-    if (!input) {
-        usage(argv[0]);
+    if (optind >= argc) {
+        Show_Usage(argv[0]);
     }
-    if (!output) {
-        output = asm_only ? "out.s" : "a.out";
+    const char *input = argv[optind];
+
+    char *outbuf = NULL;
+    if (! output) {
+        outbuf = Str_ChangeOrAppendExt(input, ".s");
+        output = outbuf;
     }
 
-    // front end: build the AST
+    int result = 0;
+
+    // Front end: build the AST
     yyin = fopen(input, "r");
-    if (!yyin) {
+    if (! yyin) {
         perror(input);
-        return 1;
+        result = 1;
+        goto cleanup;
     }
     yyparse();
     fclose(yyin);
 
-    // back end: emit assembly
-    char *asmpath;
-    if (asm_only) {
-        asmpath = strdup(output);
-    } else {
-        asmpath = malloc(strlen(output) + 4);
-        sprintf(asmpath, "%s.s", output);
+    // Back end: emit assembly
+    FILE *asm_file = fopen(output, "w");
+    if (! asm_file) {
+        perror(output);
+        result = 1;
+        goto cleanup;
     }
+    Gen_Codegen(asm_file, Ast_Program);
+    fclose(asm_file);
 
-    FILE *asmfile = fopen(asmpath, "w");
-    if (!asmfile) {
-        perror(asmpath);
-        return 1;
-    }
-    Gen_Codegen(asmfile, Ast_Program);
-    fclose(asmfile);
-
-    if (asm_only) {
-        return 0;
-    }
-
-    // assemble + link with the system C toolchain
-    const char *driver = getenv("CC");
-    if (!driver || !*driver) {
-        driver = "gcc";
-    }
-
-    size_t cmdlen = strlen(driver) + strlen(asmpath) + strlen(output) + 32;
-    char  *cmd    = malloc(cmdlen);
-    snprintf(cmd, cmdlen, "%s \"%s\" -o \"%s\"", driver, asmpath, output);
-
-    int rc = system(cmd);
-    unlink(asmpath);
-    free(cmd);
-    free(asmpath);
-
-    if (rc != 0) {
-        fprintf(stderr, "cc: assembler/linker step failed\n");
-        return 1;
-    }
-    return 0;
+cleanup:
+    free(outbuf);
+    return result;
 }
