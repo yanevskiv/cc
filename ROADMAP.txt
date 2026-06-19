@@ -1,0 +1,147 @@
+   ___ ___
+  / __/ __|
+ | (_| (__   Roadmap: own the whole toolchain, C -> ELF
+  \___\___|
+
+Goal:
+
+    Today `cc` only emits x86-64 assembly text; the system `as` and `ld`
+    (via gcc) finish the job, and the programs call into libc.  The goal is
+    to control the entire process front to back, with no gcc, no `as`, no
+    `ld` and no libc: a C source becomes a static, freestanding ELF
+    executable produced entirely by `cc`.
+
+    Because no symbol is external, there is nothing to link, so no linker
+    is needed.  The toolchain collapses to three pieces we own:
+
+        C source --(front end, exists)--> AST
+        AST      --(Gen_*, exists)------> instruction list (symbolic labels)
+        instrs   --(Asm_* encoder, new)-> x86-64 machine code
+        + runtime + .rodata --(Elf_* writer, new)--> static ELF executable
+
+Naming conventions:
+
+    Ast_*   abstract syntax tree (front end)
+    Gen_*   code generation (AST -> instruction list)
+    Asm_*   instruction IR, text printer and machine-code encoder
+    Elf_*   executable image: section buffers, symbols, ELF output
+    Str_*   string helpers
+
+Module dependency:
+
+    Gen_*  ->  Asm_*  ->  { Asm_PrintText -> .s            (debug / -S)
+                            Asm_Encode     -> Elf_* -> static ELF }
+
+--------------------------------------------------------------------------
+
+Stage 1 -- Asm_* instruction IR (no behavior change)
+
+    Replace Gen_EmitLine() (printf straight to file) with structured
+    builder calls that append to an in-memory instruction list.  A text
+    printer walks the list to reproduce the .s, so the as/ld pipeline is
+    untouched.  Pure internal refactor.
+
+    New files: h/asm.h, src/asm.c
+
+    Types:   Asm_Reg, Asm_Op, Asm_Operand (REG/IMM/MEM/RIP/LABEL),
+             Asm_Item (LABEL/INSTR/SECTION/GLOBL/BYTES)
+
+    Prefer one thin function per instruction over a generic switch.  Each
+    is a one-liner that fills an Asm_Item and appends; args follow AT&T
+    src,dst order.  The per-opcode complexity then lives only in the
+    Stage 2 encoder, as a small encoding-class table -- not in the builder
+    or the text printer.
+
+    Verb is "Emit" -- the standard code-generator verb (GCC emit_insn,
+    LLVM emitInstruction/emitLabel) and already the back end's convention
+    here (Gen_EmitLine/Gen_EmitExpr/...).  It never collides with an x86
+    mnemonic, unlike Add* (AddAdd) or Push* (PushPush).
+
+    Per-instruction builders:
+        Asm_EmitAdd/Sub/Imul/Cmp(src, dst)      reg,reg ALU
+        Asm_EmitIdiv/Neg(reg)   Asm_EmitCqo()
+        Asm_EmitSete/Setne/Setl/Setle(reg)
+        Asm_EmitMovzb(src8, dst64)
+        Asm_EmitCmpImm(imm, dst)   Asm_EmitAddImm/SubImm(imm, dst)
+        Asm_EmitMovRR(src, dst)    Asm_EmitMovImm(imm, dst)
+        Asm_EmitMovLoad(base, disp, dst)
+        Asm_EmitMovStore(src, base, disp)
+        Asm_EmitLea(base, disp, dst)   Asm_EmitLeaRip(label, dst)
+        Asm_EmitPush(reg)   Asm_EmitPop(reg)
+        Asm_EmitJmp/Je/Call(label)   Asm_EmitRet()   Asm_EmitSyscall()
+
+    Structure: Asm_EmitLabel/EmitSection/EmitGlobl/EmitBytes; each builder
+        is a 1-liner over a private Asm_Emit(op, dst, src) core plus
+        operand constructors (kept for arbitrary instructions).
+    Output:  Asm_PrintText(out) -- generic (mnemonic name table + operand
+             formatter keyed on operand kind), not a per-opcode switch.
+
+    Gen_* keeps its structure; only leaf calls change, e.g.
+        Gen_EmitLine("  add %%rdi, %%rax");  ->  Asm_EmitAdd(ASM_REG_RDI,
+                                                            ASM_REG_RAX);
+        Gen_EmitLine("  je .L.else.%d", n);  ->  Asm_EmitJe(
+                                                  Str_Format(".L.else.%d", n));
+    (Gen_EmitPush/Pop keep depth tracking and call Asm_EmitPush/Pop.)
+    Label names go through a Str_Format() helper.
+
+    Done when: generated .s is identical (or trivially equivalent) and
+    `make test` still passes through as/ld unchanged.
+
+Stage 2 -- Asm_* encoder + Elf_* writer (trivial program -> ELF)
+
+    Add a second consumer of the same list: Asm_Encode() walks the items
+    and emits machine-code bytes into an Elf_* image; Elf_Finish()
+    serializes it as a standalone static executable.
+
+    New files: h/elf.h, src/elf.c
+
+    Elf image owns section buffers, symbols and fixups:
+        Elf_ChangeSection, Elf_CurrentOffset,
+        Elf_WriteByte, Elf_Write32, Elf_Write64, Elf_WriteBytes,
+        Elf_AddSymbol, Elf_AddRel32, Elf_Finish(out, entry)
+
+    Encoder emits REX.W / opcode / ModRM / disp / imm for the closed
+    opcode set.  Branches write a rel32 placeholder + Elf_AddRel32(target);
+    Elf_Finish resolves them once vaddrs are known.
+
+    ELF layout: static ET_EXEC, base 0x400000, file offset 0 -> base so
+    vaddr = base + file_offset.  ELF header + one PT_LOAD program header +
+    section bytes.  No section-header or symbol table needed to run.
+
+    Hand-build a tiny _start (call main; exit via syscall) as Asm_* items
+    so it flows through the same encoder; entry = _start.
+
+    Done when: `cc ret42.c -o a.out && ./a.out; echo $?` prints 42, with
+    no as, ld or gcc.
+
+Stage 3 -- freestanding runtime (fizzbuzz runs standalone)
+
+    Grow _start into a small runtime providing the libc functions the
+    programs actually use, built on raw syscalls: write(), an integer ->
+    decimal helper, and a printf supporting plain text, %s and %d.
+    User programs keep declaring `int printf(...)`; they now bind to ours.
+
+    Done when: `cc fizzbuzz.c -o fizzbuzz && ./fizzbuzz` prints the
+    expected output with no external dependencies.
+
+Stage 4 -- make cc the driver; retire as/ld
+
+    Default output becomes a linked ELF executable; -S dumps the text
+    asm (debug), -c reserved.  build.mk collapses to a single rule:
+        user/%: user/%.c ; $(CC) -o $@ $<
+    Remove as/ld from the pipeline.
+
+    Done when: nothing outside cc touches the .c -> executable path.
+
+--------------------------------------------------------------------------
+
+Notes:
+
+    - Stages 1 and 2 are independently shippable: stage 1 leaves the old
+      pipeline fully working; stage 2 adds the new path behind a flag
+      (default ELF, -S text dump) without removing as/ld until stage 3/4
+      prove the runtime.
+    - Single translation unit per program -> a relocatable .o + linker
+      buys nothing; emit the static executable directly.
+    - <elf.h> provides Elf64_Ehdr/Elf64_Phdr; may be hand-defined to stay
+      fully dependency-free.
