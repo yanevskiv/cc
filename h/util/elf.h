@@ -9,6 +9,12 @@ typedef enum {
     ELF_SECTION_RODATA
 } Elf_Section;
 
+// Relocation kinds the back end records against a named symbol.
+typedef enum {
+    ELF_REL_PC32,   // R_X86_64_PC32   rip-relative data, jmp/jcc
+    ELF_REL_PLT32   // R_X86_64_PLT32  call
+} Elf_RelType;
+
 // Clears the image before encoding a fresh program.
 void Elf_Reset(void);
 
@@ -30,10 +36,20 @@ void Elf_WriteBytes(const void *data, int len);
 // Records a symbol at the current position in the current section.
 void Elf_AddSymbol(const char *name);
 
-// Reserves a rel32 at the current position, resolved to target by Elf_Finish.
-void Elf_AddRel32(const char *target);
+// Marks a defined symbol as STB_GLOBAL (from a .globl directive).
+void Elf_MarkGlobal(const char *name);
 
-// Resolves fixups and writes the finished ELF executable, entered at entry.
-void Elf_Finish(FILE *out, const char *entry);
+// Reserves a rel32 at the current position, with a relocation of type type
+// against target -- resolved internally by Elf_FinishExec, or emitted as a
+// relocation entry by Elf_FinishRel.
+void Elf_AddRel32(const char *target, Elf_RelType type);
+
+// Resolves fixups and writes a finished static ELF executable (ET_EXEC),
+// entered at entry.
+void Elf_FinishExec(FILE *out, const char *entry);
+
+// Writes a relocatable ELF object (ET_REL): .text/.rodata, a symbol table
+// and .rela.* relocations for a linker to resolve later.
+void Elf_FinishRel(FILE *out);
 
 #endif // ELF_H

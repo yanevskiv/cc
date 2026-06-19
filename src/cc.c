@@ -35,6 +35,7 @@ static void Show_Usage(const char *prog)
         "Usage: %s [options] INPUT.c\n"
         "  -o OUTPUT   write output to OUTPUT (default: " DEFAULT_OUTPUT ")\n"
         "  -S          write assembly text instead of an executable\n"
+        "  -c          write a relocatable object (.o) instead of an executable\n"
         "  -march=ARCH target architecture (default: " DEFAULT_ARCH ")\n",
         prog);
     exit(1);
@@ -46,6 +47,7 @@ int main(int argc, char **argv)
     const char *output = NULL;
     const char *arch = DEFAULT_ARCH;
     int emit_text = 0;
+    int emit_obj = 0;
 
     int opt;
     while ((opt = getopt(argc, argv, "o:cESgI:D:U:l:L:W:f:m:O::")) != -1) {
@@ -56,13 +58,16 @@ int main(int argc, char **argv)
             case 'S': {
                 emit_text = 1;
             } break;
+            case 'c': {
+                emit_obj = 1;
+            } break;
             case 'm': {
                 // -m carries machine options; only -march=ARCH is recognised.
                 if (Str_StartsWith(optarg, MARCH_PREFIX)) {
                     arch = optarg + strlen(MARCH_PREFIX);
                 }
             } break;
-            case 'c': case 'E': case 'g':
+            case 'E': case 'g':
             case 'I': case 'D': case 'U': case 'l':
             case 'L': case 'W': case 'f':
             case 'O': {
@@ -82,8 +87,13 @@ int main(int argc, char **argv)
 
     char *outbuf = NULL;
     if (! output) {
-        output = outbuf = emit_text ? Str_ChangeOrAppendExt(input, ".s")
-                                    : strdup(DEFAULT_OUTPUT);
+        if (emit_text) {
+            output = outbuf = Str_ChangeOrAppendExt(input, ".s");
+        } else if (emit_obj) {
+            output = outbuf = Str_ChangeOrAppendExt(input, ".o");
+        } else {
+            output = outbuf = strdup(DEFAULT_OUTPUT);
+        }
     }
 
     int result = 0;
@@ -107,12 +117,15 @@ int main(int argc, char **argv)
     }
     if (emit_text) {
         Gen_x86_64_CodegenAsm(out, Ast_Program);
+    } else if (emit_obj) {
+        Gen_x86_64_CodegenRel(out, Ast_Program);
     } else {
-        Gen_x86_64_CodegenElf(out, Ast_Program);
+        Gen_x86_64_CodegenExec(out, Ast_Program);
     }
     fclose(out);
 
-    if (! emit_text) {
+    // Only the freestanding executable is made runnable; .s and .o are not.
+    if (! emit_text && ! emit_obj) {
         chmod(output, ELF_MODE);
     }
 

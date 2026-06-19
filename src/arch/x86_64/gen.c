@@ -404,10 +404,21 @@ void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
 }
 
 // Encodes the whole program as a freestanding ELF executable to out.
-void Gen_x86_64_CodegenElf(FILE *out, Ast_Func *prog)
+void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 {
     Elf_Reset();
     Gen_x86_64_BuildProgram(prog, 1);
     Asm_x86_64_Encode();
-    Elf_Finish(out, "_start");
+    Elf_FinishExec(out, "_start");
+}
+
+// Encodes the whole program as a relocatable ELF object (.o) to out.  Unlike
+// the freestanding path it keeps external references (e.g. printf) undefined
+// and leaves _start to the runtime, for a linker to resolve later.
+void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
+{
+    Elf_Reset();
+    Gen_x86_64_BuildProgram(prog, 0);
+    Asm_x86_64_Encode();
+    Elf_FinishRel(out);
 }

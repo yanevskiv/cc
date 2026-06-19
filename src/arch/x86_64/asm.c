@@ -660,7 +660,7 @@ static void Asm_x86_64_EncLeaRip(Asm_x86_64_Reg dst, const char *label)
     Asm_x86_64_EncRexW(Asm_x86_64_RegHigh(dst), 0);
     Elf_WriteByte(0x8D);
     Elf_WriteByte(((dst & 7) << 3) | 5);
-    Elf_AddRel32(label);
+    Elf_AddRel32(label, ELF_REL_PC32);
     Elf_Write32(0);
 }
 
@@ -695,7 +695,10 @@ static void Asm_x86_64_EncBranch(const Asm_x86_64_Item *item)
         case ASM_X86_64_OP_JNE:  Elf_WriteByte(0x0F); Elf_WriteByte(0x85); break;
         default: break;
     }
-    Elf_AddRel32(item->ai_dst.ao_label);
+    // A call may bind through the PLT; jmp/jcc are plain PC-relative.
+    Elf_RelType type = item->ai_op == ASM_X86_64_OP_CALL ? ELF_REL_PLT32
+                                                         : ELF_REL_PC32;
+    Elf_AddRel32(item->ai_dst.ao_label, type);
     Elf_Write32(0);
 }
 
@@ -838,9 +841,11 @@ void Asm_x86_64_Encode(void)
             case ASM_X86_64_ITEM_BYTES: {
                 Elf_WriteBytes(item->ai_bytes, item->ai_nbytes);
             } break;
-            case ASM_X86_64_ITEM_GLOBL:
+            case ASM_X86_64_ITEM_GLOBL: {
+                Elf_MarkGlobal(item->ai_label);
+            } break;
             case ASM_X86_64_ITEM_DIRECTIVE: {
-                // not represented in the executable image
+                // raw assembler text, not represented in the encoded image
             } break;
         }
     }

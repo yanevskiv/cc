@@ -9,8 +9,11 @@
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
 void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog);
 
-// Encodes the program as a freestanding ELF executable written to out.
-void Gen_x86_64_CodegenElf(FILE *out, Ast_Func *prog);
+// Encodes the program as a freestanding ELF executable (ET_EXEC) to out.
+void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog);
+
+// Encodes the program as a relocatable ELF object (ET_REL) to out.
+void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog);
 
 // Returns the next unique label number.
 int Gen_x86_64_Count(void);

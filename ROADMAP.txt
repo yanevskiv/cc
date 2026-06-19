@@ -84,7 +84,7 @@ Stage 2 -- Asm_* encoder + direct static ELF (trivial program)   [DONE]
     as/ld/gcc.  This direct path is the bootstrap; it stays as the default
     until ld (Stage 5) takes over, then becomes a debug curiosity.
 
-Stage 3 -- ELF relocatable objects (cc -c -> .o)
+Stage 3 -- ELF relocatable objects (cc -c -> .o)   [DONE]
 
     Grow Elf_* from "write one finished executable" to "write a real
     relocatable object", and add `cc -c`.  The encoder stops resolving
