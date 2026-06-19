@@ -34,7 +34,7 @@ Module dependency:
 
 --------------------------------------------------------------------------
 
-Stage 1 -- Asm_* instruction IR (no behavior change)
+Stage 1 -- Asm_* instruction IR (no behavior change)   [DONE]
 
     Replace Gen_EmitLine() (printf straight to file) with structured
     builder calls that append to an in-memory instruction list.  A text

@@ -1,0 +1,64 @@
+   ___ ___
+  / __/ __|
+ | (_| (__   Style guide: how to write code and text in this project
+  \___\___|
+
+The point of these rules is that every file reads the same way.  When in
+doubt, copy the shape of the surrounding code rather than introducing a
+new convention.
+
+--------------------------------------------------------------------------
+
+C code:
+
+    Modules.  Code is grouped into modules, each with a PascalCase prefix
+    naming its area:
+
+        Ast_*   abstract syntax tree (front end)
+        Gen_*   code generation (AST -> instruction list)
+        Asm_*   instruction IR, text printer and machine-code encoder
+        Elf_*   executable image: section buffers, symbols, ELF output
+        Str_*   string helpers
+
+    Every function and global is Prefix_PascalCase, e.g. Gen_EmitExpr,
+    Asm_EmitAdd, Ast_Program.  A module's public names live in h/<mod>.h;
+    anything private is `static` in src/<mod>.c and keeps the same prefix.
+
+    Struct fields take a short lower-case tag derived from the type, used
+    on every field of that struct:
+
+        Ast_Node  -> an_kind, an_lhs, ...      Asm_Item    -> ai_op, ...
+        Ast_Var   -> av_name, av_offset, ...   Asm_Operand -> ao_kind, ...
+        Ast_Func  -> af_name, af_body, ...
+
+    Comments.  Every function and every global variable has one short
+    `//` line directly above it, no blank line in between, saying what it
+    is -- just like cc.c.  Enum and struct members may have a trailing
+    `//` note.  Do not write banner or section comments such as
+    `// --- text back end ---`; the per-item comments carry the file.
+
+    Layout.  K&R braces: the opening brace of a function sits on its own
+    line; for every other block it stays on the statement line.  Four-space
+    indent, no tabs.  Functions are always written out in full -- never
+    collapse a body onto one line, even a single-statement helper.  One
+    blank line between functions.
+
+    One function per thing.  Prefer many small, named functions over one
+    that switches on a tag.  Each x86 instruction has its own builder
+    (Asm_EmitAdd, Asm_EmitMov...) that fills an item directly, rather than
+    a single generic Asm_Emit(op, ...) dispatcher.  The only place a big
+    per-opcode switch is allowed is the machine-code encoder.
+
+    Formatted strings.  A function that stores a name or label takes a
+    printf-style format and its own varargs (Asm_EmitJmp(".L.end.%d", n)),
+    formats it with Str_VFormat, and owns the result -- freeing it later.
+    Callers pass literals and plain values; they never build the string or
+    juggle ownership.  Mark such prototypes __attribute__((format(printf
+    ...))) so the compiler checks the arguments.
+
+Text files (README, ROADMAP, this file):
+
+    Plain ASCII, hard-wrapped to about 74 columns.  Open with the four-line
+    ___ ___ banner and a one-line title.  Sections are a short heading
+    followed by body text indented four spaces.  Use a row of dashes to
+    separate major parts.  No Markdown.

@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "asm.h"
+
 // Maximum number of distinct string literals in one translation unit.
 #define MAX_STRINGS 1024
 
@@ -121,9 +123,6 @@ Ast_Var *Ast_CurrentLocals(void);
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
 void Gen_Codegen(FILE *out, Ast_Func *prog);
 
-// Writes one formatted line of assembly to the output.
-void Gen_EmitLine(const char *fmt, ...);
-
 // Returns the next unique label number.
 int Gen_Count(void);
 
@@ -131,7 +130,7 @@ int Gen_Count(void);
 void Gen_EmitPush(void);
 
 // Pops the top of the stack into reg and tracks the depth.
-void Gen_EmitPop(const char *reg);
+void Gen_EmitPop(Asm_Reg reg);
 
 // Rounds n up to the nearest multiple of align.
 int Gen_AlignTo(int n, int align);
