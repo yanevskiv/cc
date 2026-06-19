@@ -20,7 +20,7 @@ static Ast_Var *Ast_Locals;
 int Ast_AddString(char *str)
 {
     if (Ast_NumStrings >= MAX_STRINGS) {
-        error("too many string literals (max %d)", MAX_STRINGS);
+        Show_Error("too many string literals (max %d)", MAX_STRINGS);
     }
     Ast_Strings[Ast_NumStrings] = str;
     return Ast_NumStrings++;

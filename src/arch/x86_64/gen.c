@@ -3,8 +3,8 @@
 #include "common.h"
 #include "ast/ast.h"
 #include "util/elf.h"
-#include "x86_64/asm.h"
-#include "x86_64/gen.h"
+#include "arch/x86_64/asm.h"
+#include "arch/x86_64/gen.h"
 
 // Number of integer arguments the ABI passes in registers; the rest go on the stack.
 #define MAX_REG_ARGS 6
@@ -70,7 +70,7 @@ void Gen_x86_64_EmitAddr(Ast_Node *node)
         Asm_x86_64_EmitLea(ASM_X86_64_REG_RBP, node->an_var->av_offset, ASM_X86_64_REG_RAX);
         return;
     }
-    error("codegen: not an lvalue");
+    Show_Error("codegen: not an lvalue");
 }
 
 // Counts the arguments in a call's argument list.
@@ -229,7 +229,7 @@ void Gen_x86_64_EmitExpr(Ast_Node *node)
                     Asm_x86_64_EmitMovzb(ASM_X86_64_REG_RAX, ASM_X86_64_REG_RAX);
                 } break;
                 default: {
-                    error("codegen: unexpected node kind %d", node->an_kind);
+                    Show_Error("codegen: unexpected node kind %d", node->an_kind);
                 }
             }
         }
@@ -291,7 +291,7 @@ void Gen_x86_64_EmitStmt(Ast_Node *node)
             // nothing to emit
         } break;
         default: {
-            error("codegen: unexpected statement kind %d", node->an_kind);
+            Show_Error("codegen: unexpected statement kind %d", node->an_kind);
         }
     }
 }
@@ -397,7 +397,7 @@ static void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding)
 }
 
 // Emits assembly text for the whole program to out.
-void Gen_x86_64_Codegen(FILE *out, Ast_Func *prog)
+void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 0);
     Asm_x86_64_PrintText(out);

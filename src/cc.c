@@ -8,7 +8,7 @@
 #include "common.h"
 #include "ast/ast.h"
 #include "util/str.h"
-#include "x86_64/gen.h"
+#include "arch/x86_64/gen.h"
 
 // Permission bits for the executables cc writes (rwxr-xr-x).
 #define ELF_MODE 0755
@@ -72,7 +72,7 @@ int main(int argc, char **argv)
     }
 
     if (! Str_Equals(arch, DEFAULT_ARCH)) {
-        error("unsupported architecture '%s' (only " DEFAULT_ARCH " is supported)", arch);
+        Show_Error("unsupported architecture '%s' (only " DEFAULT_ARCH " is supported)", arch);
     }
 
     if (optind >= argc) {
@@ -106,7 +106,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     if (emit_text) {
-        Gen_x86_64_Codegen(out, Ast_Program);
+        Gen_x86_64_CodegenAsm(out, Ast_Program);
     } else {
         Gen_x86_64_CodegenElf(out, Ast_Program);
     }

@@ -4,10 +4,10 @@
 #include <stdio.h>
 
 #include "ast/ast.h"
-#include "x86_64/asm.h"
+#include "arch/x86_64/asm.h"
 
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
-void Gen_x86_64_Codegen(FILE *out, Ast_Func *prog);
+void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog);
 
 // Encodes the program as a freestanding ELF executable written to out.
 void Gen_x86_64_CodegenElf(FILE *out, Ast_Func *prog);

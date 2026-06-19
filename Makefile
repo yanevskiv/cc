@@ -1,5 +1,7 @@
+TARGET_ARCH := x86_64
+
 CC      := gcc
-CFLAGS  := -std=gnu11 -O2 -Ih -Iout
+CFLAGS  := -std=gnu11 -O2 -Ih -Iout -DTARGET_ARCH=$(TARGET_ARCH)
 WARN    := -Wall -Wextra
 LEX     := flex
 YACC    := bison
@@ -17,7 +19,7 @@ GEN_OBJS  := $(OUT)/lex.yy.o $(OUT)/parser.tab.o
 USER_SRCS := $(wildcard user/*.c)
 
 # --- phony recipes ---
-all: $(BUILD)/bin/cc $(BUILD)/user $(BUILD)/Makefile
+all: $(BUILD)/bin/$(TARGET_ARCH)-cc $(BUILD)/user $(BUILD)/Makefile
 
 test: all
 	$(MAKE) -C $(BUILD) run
@@ -26,7 +28,7 @@ clean:
 	rm -rf $(BUILD) $(OUT)
 
 # --- tool recipes ---
-$(BUILD)/bin/cc: $(OUT)/cc.o $(LIB_OBJS) $(GEN_OBJS) | $(BUILD)/bin
+$(BUILD)/bin/$(TARGET_ARCH)-cc: $(OUT)/cc.o $(LIB_OBJS) $(GEN_OBJS) | $(BUILD)/bin
 	$(CC) $(CFLAGS) $(WARN) $^ -o $@
 
 # --- front-end generators ---

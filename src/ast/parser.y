@@ -200,7 +200,7 @@ expr
                              n->an_str_idx = Ast_AddString($1); $$ = n; }
     | IDENT
         { Ast_Var *v = Ast_FindVar($1);
-          if (!v) error("use of undeclared identifier '%s'", $1);
+          if (!v) Show_Error("use of undeclared identifier '%s'", $1);
           $$ = Ast_NewVarNode(v); }
     | IDENT '(' args ')'
         { Ast_Node *n = Ast_NewNode(AST_NODE_KIND_CALL); n->an_funcname = $1; n->an_args = $3; $$ = n; }
@@ -219,7 +219,7 @@ expr
     | expr AND expr        { $$ = Ast_NewBinary(AST_NODE_KIND_AND, $1, $3); }
     | expr OR expr         { $$ = Ast_NewBinary(AST_NODE_KIND_OR, $1, $3); }
     | expr '=' expr
-        { if ($1->an_kind != AST_NODE_KIND_VAR) error("expression is not assignable");
+        { if ($1->an_kind != AST_NODE_KIND_VAR) Show_Error("expression is not assignable");
           $$ = Ast_NewBinary(AST_NODE_KIND_ASSIGN, $1, $3); }
     | '-' expr %prec UMINUS { $$ = Ast_NewUnary(AST_NODE_KIND_NEG, $2); }
     | '!' expr %prec UMINUS { $$ = Ast_NewUnary(AST_NODE_KIND_NOT, $2); }

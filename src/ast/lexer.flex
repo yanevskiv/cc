@@ -77,7 +77,7 @@ A   [A-Za-z_0-9]
 
 [-+*/%=<>!(){};,&]       return yytext[0];
 
-.                       { error("lexer: unexpected character '%s' on line %d",
+.                       { Show_Error("lexer: unexpected character '%s' on line %d",
                                 yytext, yylineno); }
 
 %%

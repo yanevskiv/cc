@@ -4,7 +4,7 @@
 #include <string.h>
 #include "util/elf.h"
 #include "util/str.h"
-#include "x86_64/asm.h"
+#include "arch/x86_64/asm.h"
 
 // The kind of one item in the instruction list.
 typedef enum {
