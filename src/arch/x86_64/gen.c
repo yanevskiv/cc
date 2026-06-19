@@ -422,3 +422,13 @@ void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
     Asm_x86_64_Encode();
     Elf_FinishRel(out);
 }
+
+// Stage 4 harness: a relocatable object that also carries the _start runtime,
+// so the link core has an entry point until the Stage 7 crt supplies one.
+void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog)
+{
+    Elf_Reset();
+    Gen_x86_64_BuildProgram(prog, 1);
+    Asm_x86_64_Encode();
+    Elf_FinishRel(out);
+}

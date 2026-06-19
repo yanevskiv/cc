@@ -15,6 +15,11 @@ void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog);
 // Encodes the program as a relocatable ELF object (ET_REL) to out.
 void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog);
 
+// Stage 4 harness: like Gen_x86_64_CodegenRel, but includes the _start runtime
+// so the link core has an entry point to resolve.  Temporary -- superseded by
+// the Stage 7 crt; remove once crt0.o provides _start.
+void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog);
+
 // Returns the next unique label number.
 int Gen_x86_64_Count(void);
 

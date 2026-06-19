@@ -10,6 +10,13 @@
 #include "util/str.h"
 #include "arch/x86_64/gen.h"
 
+// Temporary: --start-obj emits a relocatable object that also carries the
+// _start runtime, standing in for the crt until Stage 7 provides one, so the
+// linker has an entry point to resolve.
+enum {
+    OPT_START_OBJ = 256
+};
+
 // Permission bits for the executables cc writes (rwxr-xr-x).
 #define ELF_MODE 0755
 
@@ -36,7 +43,8 @@ static void Show_Usage(const char *prog)
         "  -o OUTPUT   write output to OUTPUT (default: " DEFAULT_OUTPUT ")\n"
         "  -S          write assembly text instead of an executable\n"
         "  -c          write a relocatable object (.o) instead of an executable\n"
-        "  -march=ARCH target architecture (default: " DEFAULT_ARCH ")\n",
+        "  -march=ARCH target architecture (default: " DEFAULT_ARCH ")\n"
+        "  --start-obj write a relocatable object that includes _start\n",
         prog);
     exit(1);
 }
@@ -48,9 +56,15 @@ int main(int argc, char **argv)
     const char *arch = DEFAULT_ARCH;
     int emit_text = 0;
     int emit_obj = 0;
+    int emit_start = 0;   // temporary: object includes _start (crt stand-in)
+
+    static struct option longopts[] = {
+        { "start-obj", no_argument, 0, OPT_START_OBJ },
+        { 0, 0, 0, 0 }
+    };
 
     int opt;
-    while ((opt = getopt(argc, argv, "o:cESgI:D:U:l:L:W:f:m:O::")) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:cESgI:D:U:l:L:W:f:m:O::", longopts, NULL)) != -1) {
         switch (opt) {
             case 'o': {
                 output = optarg;
@@ -60,6 +74,9 @@ int main(int argc, char **argv)
             } break;
             case 'c': {
                 emit_obj = 1;
+            } break;
+            case OPT_START_OBJ: {
+                emit_start = emit_obj = 1;
             } break;
             case 'm': {
                 // -m carries machine options; only -march=ARCH is recognised.
@@ -117,6 +134,8 @@ int main(int argc, char **argv)
     }
     if (emit_text) {
         Gen_x86_64_CodegenAsm(out, Ast_Program);
+    } else if (emit_start) {
+        Gen_x86_64_CodegenRelStart(out, Ast_Program);
     } else if (emit_obj) {
         Gen_x86_64_CodegenRel(out, Ast_Program);
     } else {

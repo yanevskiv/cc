@@ -35,10 +35,13 @@ Naming conventions:
     Gen_*   code generation (AST -> instruction list)
     Asm_*   instruction IR, text printer, text parser and machine-code
             encoder
-    Elf_*   ELF objects: read/write ET_REL and ET_EXEC, section buffers,
-            symbols, relocations, and the cross-object link core
+    Elf_*   generic ELF object library: byte buffers, sections, symbols,
+            relocations, and read/write of ET_REL and ET_EXEC -- no policy,
+            no exit(), and no section is named by the library (Stage 5b)
+    Link_*  linker policy over Elf_*: merge sections, resolve symbols
+    Reloc_* machine relocation application (x86-64 R_X86_64_* semantics)
     As_*    assembler driver (build/bin/as): argument parsing over Asm_*
-    Ld_*    linker driver (build/bin/ld): argument parsing over Elf_*
+    Ld_*    linker driver (build/bin/ld): argument parsing over Link_*
     Str_*   string helpers (incl. <regex.h> wrappers for the assembler)
 
 Tools (binaries):
@@ -57,7 +60,7 @@ Module dependency:
     Gen_*  ->  Asm_*  ->  { Asm_PrintText -> .s              (debug / -S)
                             Asm_Encode     -> Elf_* (ET_REL)  (-c)  }
     As_*   ->  Asm_Parse (.s -> IR) -> Asm_Encode -> Elf_* (ET_REL)
-    Ld_*   ->  Elf_* (read ET_REL, link, write ET_EXEC)
+    Ld_*   ->  Link_*/Reloc_*  ->  Elf_* (read ET_REL, write ET_EXEC/ET_REL)
 
 --------------------------------------------------------------------------
 
@@ -108,7 +111,7 @@ Stage 3 -- ELF relocatable objects (cc -c -> .o)   [DONE]
     *system* ld links our foo.o into a working executable (correctness
     check against a known-good linker).
 
-Stage 4 -- Elf_* link core (link two or more objects)
+Stage 4 -- Elf_* link core (link two or more objects)   [DONE]
 
     Teach Elf_* the other half: read ET_REL objects back in and combine
     them.  Merge same-type sections, assign addresses, build one global
@@ -130,12 +133,16 @@ Stage 4 -- Elf_* link core (link two or more objects)
     Done when: in the harness, Elf_* links foo.o + bar.o into an a.out
     that runs and returns the expected status, no system ld involved.
 
-Stage 5 -- ld driver (build/bin/ld)
+    Done (met): Elf_Link() is the read/merge/resolve/relocate core, now
+    driven by the Stage 5a ld (see `make stage5`).  Cross-check: the system
+    ld also links our two objects into a working 42.
 
-    Wrap the Stage 4 link core in a real tool.  New files h/ld.h, src/ld.c
-    provide ld's own int main() and argument parsing; all ELF work stays
-    in Elf_*.  The Makefile splits into shared objects + per-tool mains and
-    starts building build/bin/ld alongside build/bin/cc.
+Stage 5a -- ld driver (build/bin/ld)   [DONE]
+
+    Wrap the Stage 4 link core in a real tool.  src/ld.c provides ld's own
+    int main() and argument parsing; all ELF work stays in Elf_*.  The
+    Makefile splits into shared objects + per-tool mains and starts
+    building build/bin/ld alongside build/bin/cc.
 
     ld command line (deliberately tiny):
         ld a.o b.o -o a.out                       static link -> ET_EXEC
@@ -146,6 +153,75 @@ Stage 5 -- ld driver (build/bin/ld)
     Done when: `cc -c a.c && cc -c b.c && ld a.o b.o -o a.out && ./a.out`
     works with no system ld; -r round-trips (its output relinks); -place
     is honored; and our ld also links a .o produced by the system as/cc.
+
+    Done (met): src/ld.c provides ld's main and arg parsing (-o, -e, -r,
+    -place=SEC@ADDR, object inputs) inline; all ELF work stays in Elf_Link.
+    The Makefile is split into shared LIB_OBJS + per-tool mains (cc.o, ld.o)
+    and builds both build/bin/x86_64-cc and build/bin/x86_64-ld.  Elf_Link
+    branches: -r merges the symbol tables (globals unified by name, locals
+    kept per object) and rebases relocations into one ET_REL; otherwise it
+    resolves and writes an ET_EXEC, with -place giving each output section its
+    own PT_LOAD at the requested address.  The ET_REL writer is shared with
+    cc -c (Elf_EmitSymtab + Elf_WriteRelFile).  `make stage5` checks the
+    static link, the -r round-trip and -place; cross-checks: GNU ld links our
+    exec and -r objects, and our ld links a GNU-produced .o -- all return 42.
+    (cc --start-obj remains as the crt stand-in for _start until Stage 7.)
+
+    Caveat carried into 5b: it works, but elf.c is three half-libraries
+    fused at file-scope globals with ".text/.rodata only" baked in -- so
+    -place only knows text/data and the reader/writer/encoder cannot share
+    a symbol or a section.  See ELF.txt (autopsy) and ELF_REWRITE.txt.
+
+Stage 5b -- ELF rewrite: generic ELF library + link/reloc split
+
+    Replace the Stage-5a ELF code with one in-memory ELF model and small,
+    single-purpose function families, then lift all linker policy out of
+    the container.  No new feature -- a structural rewrite so adding a
+    section, placing one by name, or sharing code between reader and writer
+    stops fighting the design.  Full spec in ELF_REWRITE.txt.
+
+    elf.c becomes a generic, section-agnostic, exit()-free library over one
+    model: an Elf is a list of Elf_Sec (each owning its byte buffer and its
+    own relocation list) plus one Elf_Sym table.  Read and write are
+    inverses over that model, split into families by the noun they own:
+        Elf_Buf*      growable byte buffers (no ELF knowledge)
+        Elf_Section*  the section list: add / find-by-name / place / iterate
+        Elf_Symbol*   the symbol table: add / find / iterate
+        Elf_Rela*     relocations, attached to the section they patch
+        Elf_Read*     bytes -> Elf        Elf_Write*  Elf -> bytes
+    In memory there are names and pointers, never indices: .strtab,
+    .shstrtab, st_shndx, sh_link/sh_info and the r_info symbol index exist
+    only inside Elf_Write (synthesized) and Elf_Read (dissolved).  The
+    library names no section -- which sections exist is the caller's data,
+    and placement is just sec_addr on a named section, so -place=NAME@ADDR
+    works for any section.
+
+    Linker policy moves into its own modules, as clients of the library:
+        Link_*   (src/util/link.c)        merge same-named sections, resolve
+                                          symbols (unify globals, keep
+                                          locals), diagnose multiple /
+                                          undefined definitions
+        Reloc_*  (src/arch/x86_64/reloc.c) apply relocations -- the only
+                                          code that interprets R_X86_64_*
+                                          (S+A-P, S+A, ...)
+    cc's back end builds an Elf and calls Elf_Write; ld parses arguments,
+    calls Link_Run, and calls Elf_Write.  Neither owns ELF internals.
+
+    Staged so the tree keeps building (shims first, deletions last):
+      1. new Elf_Buf/New/Section/Symbol/Rela + Elf_Write(ET_REL); old
+         Elf_FinishRel becomes a shim over it -- `make test` unchanged.
+      2. Elf_Read + Link_*/Reloc_* on the new model; Elf_Link a shim.
+      3. ET_EXEC + PT_LOAD synthesis in Elf_Write; route the Stage-2 direct
+         output and the linker's exec output through it; drop the shims and
+         the file-scope globals.
+      4. port cc/ld to the new API; remove the last .text/.rodata
+         assumptions.
+
+    Done when: cc -c, ld, ld -r and -place still pass `make stage5` and the
+    GNU cross-checks (objects link, exec runs, all return 42) with no
+    behavior change; elf.c names no section and calls no exit(); link/reloc
+    policy lives in link.c/reloc.c; and -place accepts an arbitrary section
+    name -- proven by placing a third, differently-named section.
 
 Stage 6 -- as (assembler: .s -> .o)
 
