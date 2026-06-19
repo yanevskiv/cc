@@ -6,6 +6,15 @@
 #include "cc.h"
 #include "str.h"
 
+// Number of integer arguments the ABI passes in registers; the rest go on the stack.
+#define MAX_REG_ARGS 6
+
+// Size in bytes of a stack slot and a general-purpose register.
+#define WORD_SIZE 8
+
+// Required %rsp alignment, in bytes, at the point of a `call`.
+#define STACK_ALIGN 16
+
 // The finished program, filled in by the parser.
 Ast_Func *Ast_Program;
 
@@ -110,7 +119,7 @@ Ast_Var *Ast_DeclareVar(const char *name)
 {
     Ast_Var *var = Ast_FindVar(name);
     if (var) {
-        return var; // re-declaration: reuse the existing slot
+        return var;
     }
     var = calloc(1, sizeof(Ast_Var));
     var->av_name = strdup(name);
@@ -159,6 +168,35 @@ void Gen_EmitAddr(Ast_Node *node)
         return;
     }
     error("codegen: not an lvalue");
+}
+
+// Counts the arguments in a call's argument list.
+static int Gen_CallCountArgs(Ast_Node *args)
+{
+    int nArgs = 0;
+    for (Ast_Node *arg = args; arg; arg = arg->an_next) {
+        nArgs++;
+    }
+    return nArgs;
+}
+
+// Evaluates call arguments and pushes them so the first lands on top.
+static void Gen_CallPushArgs(Ast_Node *arg)
+{
+    if (!arg) {
+        return;
+    }
+    Gen_CallPushArgs(arg->an_next);
+    Gen_EmitExpr(arg);
+    Gen_EmitPush();
+}
+
+// Pops the first nReg pushed arguments into the ABI argument registers.
+static void Gen_CallPopArgs(int nReg)
+{
+    for (int i = 0; i < nReg; i++) {
+        Gen_EmitPop(Gen_ArgReg[i]);
+    }
 }
 
 // Emits code for an expression, leaving its result in %rax.
@@ -221,35 +259,32 @@ void Gen_EmitExpr(Ast_Node *node)
             Asm_EmitLabel(".L.end.%d", count);
         } break;
         case AST_NODE_KIND_CALL: {
-            int nargs = 0;
-            for (Ast_Node *arg = node->an_args; arg; arg = arg->an_next) {
-                Gen_EmitExpr(arg);
-                Gen_EmitPush();
-                nargs++;
-            }
-            for (int i = nargs - 1; i >= 0; i--) {
-                Gen_EmitPop(Gen_ArgReg[i]);
+            int nArgs  = Gen_CallCountArgs(node->an_args);
+            int nReg   = nArgs < MAX_REG_ARGS ? nArgs : MAX_REG_ARGS;
+            int nStack = nArgs - nReg;
+
+            int nAlignPad = (Gen_Depth + nStack) % (STACK_ALIGN / WORD_SIZE);
+            if (nAlignPad) {
+                Asm_EmitSubImm(WORD_SIZE, ASM_REG_RSP);
+                Gen_Depth++;
             }
 
-            // The ABI requires %rsp to be 16-byte aligned at the `call`.  Each
-            // outstanding Gen_EmitPush() moved it by 8, so realign when depth is odd.
-            int realign = Gen_Depth % 2;
-            if (realign) {
-                Asm_EmitSubImm(8, ASM_REG_RSP);
-            }
-            Asm_EmitMovImm8(0, ASM_REG_RAX); // no vector regs for varargs
+            Gen_CallPushArgs(node->an_args);
+            Gen_CallPopArgs(nReg);
+
+            Asm_EmitMovImm8(0, ASM_REG_RAX);
             Asm_EmitCall(node->an_funcname);
-            if (realign) {
-                Asm_EmitAddImm(8, ASM_REG_RSP);
+
+            if (nStack + nAlignPad > 0) {
+                Asm_EmitAddImm(WORD_SIZE * (nStack + nAlignPad), ASM_REG_RSP);
+                Gen_Depth -= nStack + nAlignPad;
             }
         } break;
         default: {
-            // Binary operators: right operand spilled, left operand in %rax.
             Gen_EmitExpr(node->an_rhs);
             Gen_EmitPush();
             Gen_EmitExpr(node->an_lhs);
             Gen_EmitPop(ASM_REG_RDI);
-            // now: %rax = lhs, %rdi = rhs
 
             switch (node->an_kind) {
                 case AST_NODE_KIND_ADD: {
@@ -363,10 +398,10 @@ void Gen_AssignLvarOffsets(Ast_Func *func)
 {
     int offset = 0;
     for (Ast_Var *var = func->af_locals; var; var = var->av_next) {
-        offset += 8;
+        offset += WORD_SIZE;
         var->av_offset = -offset;
     }
-    func->af_stack_size = Gen_AlignTo(offset, 16);
+    func->af_stack_size = Gen_AlignTo(offset, STACK_ALIGN);
 }
 
 // Emits the .rodata section holding all string literals.
@@ -378,7 +413,6 @@ void Gen_EmitDataSection(void)
     Asm_EmitSection(ASM_SECTION_RODATA);
     for (int i = 0; i < Ast_NumStrings; i++) {
         Asm_EmitLabel(".Lstr%d", i);
-        // Emit raw bytes (including the terminating NUL) so any contents survive.
         Asm_EmitBytes(Ast_Strings[i], strlen(Ast_Strings[i]) + 1);
     }
 }
@@ -401,15 +435,21 @@ void Gen_EmitTextSection(Ast_Func *prog)
             Asm_EmitSubImm(func->af_stack_size, ASM_REG_RSP);
         }
 
-        // spill incoming parameters to their stack slots
+        // spill incoming parameters
         int i = 0;
         for (Ast_Var *param = func->af_params; param; param = param->av_param_next) {
-            Asm_EmitMovStore(Gen_ArgReg[i++], ASM_REG_RBP, param->av_offset);
+            if (i < MAX_REG_ARGS) {
+                Asm_EmitMovStore(Gen_ArgReg[i], ASM_REG_RBP, param->av_offset);
+            } else {
+                Asm_EmitMovLoad(ASM_REG_RBP, 2 * WORD_SIZE + (i - MAX_REG_ARGS) * WORD_SIZE, ASM_REG_RAX);
+                Asm_EmitMovStore(ASM_REG_RAX, ASM_REG_RBP, param->av_offset);
+            }
+            i++;
         }
 
         Gen_EmitStmt(func->af_body);
 
-        // epilogue (fall-through returns 0)
+        // epilogue
         Asm_EmitMovImm(0, ASM_REG_RAX);
         Asm_EmitLabel(".L.return.%s", func->af_name);
         Asm_EmitMovRR(ASM_REG_RBP, ASM_REG_RSP);
@@ -428,8 +468,6 @@ void Gen_Codegen(FILE *out, Ast_Func *prog)
     Asm_EmitDirective(".file \"cc\"");
     Gen_EmitDataSection();
     Gen_EmitTextSection(prog);
-
-    // Mark the stack as non-executable to silence the linker warning.
     Asm_EmitDirective(".section .note.GNU-stack,\"\",@progbits");
 
     Asm_PrintText(out);
