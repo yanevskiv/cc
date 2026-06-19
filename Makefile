@@ -11,10 +11,19 @@ SRCS    := $(wildcard src/*.c)
 OBJS    := $(patsubst src/%.c,$(OUT)/%.o,$(SRCS))
 GEN_OBJS:= $(OUT)/lex.yy.o $(OUT)/parser.tab.o
 
+USER_SRCS := $(wildcard user/*.c)
 
-all: $(BUILD)/cc $(BUILD)/fizzbuzz.c $(BUILD)/Makefile
+# --- phony recipes ---
+all: $(BUILD)/bin/cc $(BUILD)/user $(BUILD)/Makefile
 
-$(BUILD)/cc: $(OBJS) $(GEN_OBJS) | $(BUILD)
+test: all
+	$(MAKE) -C $(BUILD) run
+
+clean:
+	rm -rf $(BUILD) $(OUT)
+
+# --- compiler recipes ---
+$(BUILD)/bin/cc: $(OBJS) $(GEN_OBJS) | $(BUILD)/bin
 	$(CC) $(CFLAGS) $(WARN) $^ -o $@
 
 $(OUT)/parser.tab.c $(OUT)/parser.tab.h: src/parser.y | $(OUT)
@@ -32,10 +41,12 @@ $(OUT)/parser.tab.o: $(OUT)/parser.tab.c
 $(OUT)/%.o: src/%.c $(OUT)/parser.tab.h | $(OUT)
 	$(CC) $(CFLAGS) $(WARN) -c $< -o $@
 
-$(BUILD)/fizzbuzz.c: user/fizzbuzz.c | $(BUILD)
-	cp $< $@
+# --- build/ recipes ---
+$(BUILD)/user: $(USER_SRCS) | $(BUILD)
+	rm -rf $@
+	cp -r user $@
 
-$(BUILD)/Makefile: src/build.mk | $(BUILD)
+$(BUILD)/Makefile: build.mk | $(BUILD)
 	cp $< $@
 
 $(OUT):
@@ -44,10 +55,7 @@ $(OUT):
 $(BUILD):
 	mkdir -p $(BUILD)
 
-test: all
-	$(MAKE) -C $(BUILD) run
-
-clean:
-	rm -rf $(BUILD) $(OUT)
+$(BUILD)/bin: | $(BUILD)
+	mkdir -p $(BUILD)/bin
 
 .PHONY: all clean test

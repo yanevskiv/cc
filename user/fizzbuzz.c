@@ -1,6 +1,8 @@
-/* test.c - exercises the language subset that `cc` understands:
- * prototypes, locals, for-loops, if/else-if chains, %, comparisons and calls. */
-
+/*
+  Description: Fizzbuzz
+  Compile:     ./cc fizzbuzz.c -o fizzbuzz
+  Run:         ./fizzbuzz
+ */
 int printf(const char *fmt, ...);
 
 int main(void)

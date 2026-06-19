@@ -121,4 +121,37 @@ Ast_Var *Ast_CurrentLocals(void);
 // Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
 void Gen_Codegen(FILE *out, Ast_Func *prog);
 
+// Writes one formatted line of assembly to the output.
+void Gen_EmitLine(const char *fmt, ...);
+
+// Returns the next unique label number.
+int Gen_Count(void);
+
+// Pushes %rax onto the stack and tracks the depth.
+void Gen_EmitPush(void);
+
+// Pops the top of the stack into reg and tracks the depth.
+void Gen_EmitPop(const char *reg);
+
+// Rounds n up to the nearest multiple of align.
+int Gen_AlignTo(int n, int align);
+
+// Computes the address of an lvalue into %rax.
+void Gen_EmitAddr(Ast_Node *node);
+
+// Emits code for an expression, leaving its result in %rax.
+void Gen_EmitExpr(Ast_Node *node);
+
+// Emits code for a statement.
+void Gen_EmitStmt(Ast_Node *node);
+
+// Assigns each local a stack slot and records the frame size.
+void Gen_AssignLvarOffsets(Ast_Func *func);
+
+// Emits the .rodata section holding all string literals.
+void Gen_EmitDataSection(void);
+
+// Emits the .text section: prologue, body and epilogue for each function.
+void Gen_EmitTextSection(Ast_Func *prog);
+
 #endif // CC_H

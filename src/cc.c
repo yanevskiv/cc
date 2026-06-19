@@ -122,7 +122,7 @@ Ast_Var *Ast_CurrentLocals(void)
 }
 
 // Writes one formatted line of assembly to the output.
-static void Gen_EmitLine(const char *fmt, ...)
+void Gen_EmitLine(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -132,33 +132,33 @@ static void Gen_EmitLine(const char *fmt, ...)
 }
 
 // Returns the next unique label number.
-static int Gen_Count(void)
+int Gen_Count(void)
 {
     return Gen_LabelId++;
 }
 
 // Pushes %rax onto the stack and tracks the depth.
-static void Gen_EmitPush(void)
+void Gen_EmitPush(void)
 {
     Gen_EmitLine("  push %%rax");
     Gen_Depth++;
 }
 
 // Pops the top of the stack into reg and tracks the depth.
-static void Gen_EmitPop(const char *reg)
+void Gen_EmitPop(const char *reg)
 {
     Gen_EmitLine("  pop %s", reg);
     Gen_Depth--;
 }
 
 // Rounds n up to the nearest multiple of align.
-static int Gen_AlignTo(int n, int align)
+int Gen_AlignTo(int n, int align)
 {
     return (n + align - 1) / align * align;
 }
 
 // Computes the address of an lvalue into %rax.
-static void Gen_EmitAddr(Ast_Node *node)
+void Gen_EmitAddr(Ast_Node *node)
 {
     if (node->an_kind == AST_NODE_KIND_VAR) {
         Gen_EmitLine("  lea %d(%%rbp), %%rax", node->an_var->av_offset);
@@ -168,7 +168,7 @@ static void Gen_EmitAddr(Ast_Node *node)
 }
 
 // Emits code for an expression, leaving its result in %rax.
-static void Gen_EmitExpr(Ast_Node *node)
+void Gen_EmitExpr(Ast_Node *node)
 {
     switch (node->an_kind) {
         case AST_NODE_KIND_NUM: {
@@ -305,7 +305,7 @@ static void Gen_EmitExpr(Ast_Node *node)
 }
 
 // Emits code for a statement.
-static void Gen_EmitStmt(Ast_Node *node)
+void Gen_EmitStmt(Ast_Node *node)
 {
     switch (node->an_kind) {
         case AST_NODE_KIND_RETURN: {
@@ -365,7 +365,7 @@ static void Gen_EmitStmt(Ast_Node *node)
 }
 
 // Assigns each local a stack slot and records the frame size.
-static void Gen_AssignLvarOffsets(Ast_Func *func)
+void Gen_AssignLvarOffsets(Ast_Func *func)
 {
     int offset = 0;
     for (Ast_Var *var = func->af_locals; var; var = var->av_next) {
@@ -376,7 +376,7 @@ static void Gen_AssignLvarOffsets(Ast_Func *func)
 }
 
 // Emits the .rodata section holding all string literals.
-static void Gen_EmitDataSection(void)
+void Gen_EmitDataSection(void)
 {
     if (Ast_NumStrings == 0) {
         return;
@@ -393,7 +393,7 @@ static void Gen_EmitDataSection(void)
 }
 
 // Emits the .text section: prologue, body and epilogue for each function.
-static void Gen_EmitTextSection(Ast_Func *prog)
+void Gen_EmitTextSection(Ast_Func *prog)
 {
     Gen_EmitLine("  .text");
     for (Ast_Func *func = prog; func; func = func->af_next) {
@@ -451,7 +451,7 @@ int yyparse(void);
 static void Show_Usage(const char *prog)
 {
     fprintf(stderr,
-        "Usage: %s [-o OUTPUT] INPUT.c\n"
+        "Usage: %s [options] INPUT.c\n"
         "  -o OUTPUT   write assembly to OUTPUT (default: INPUT.s)\n",
         prog);
     exit(1);
@@ -463,8 +463,6 @@ static char *Str_ChangeOrAppendExt(const char *input, const char *suffix)
     const char *slash = strrchr(input, '/');
     const char *dot   = strrchr(input, '.');
 
-    // Only a '.' in the final path component counts as an extension separator,
-    // so a dot in a directory name ('a.b/main') is not mistaken for one.
     if (!dot || (slash && dot < slash)) {
         dot = NULL;
     }
@@ -473,7 +471,7 @@ static char *Str_ChangeOrAppendExt(const char *input, const char *suffix)
     size_t slen = strlen(suffix);
     char  *out  = malloc(stem + slen + 1);
     memcpy(out, input, stem);
-    memcpy(out + stem, suffix, slen + 1); // copy suffix including its NUL
+    memcpy(out + stem, suffix, slen + 1);
     return out;
 }
 
@@ -483,13 +481,16 @@ int main(int argc, char **argv)
     const char *output = NULL;
 
     int opt;
-    while ((opt = getopt(argc, argv, "o:")) != -1) {
+    while ((opt = getopt(argc, argv, "o:cESgI:D:U:l:L:W:f:m:O::")) != -1) {
         switch (opt) {
             case 'o': {
                 output = optarg;
             } break;
-            default: {
-                Show_Usage(argv[0]);
+            case 'c': case 'E': case 'S': case 'g':
+            case 'I': case 'D': case 'U': case 'l':
+            case 'L': case 'W': case 'f': case 'm':
+            case 'O': {
+                // Recognised compiler flag with no effect here; ignore it.
             } break;
         }
     }
