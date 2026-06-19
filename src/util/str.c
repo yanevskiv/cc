@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "str.h"
+#include "util/str.h"
 
 // Returns a freshly allocated string formatted from a va_list.
 char *Str_VFormat(const char *fmt, va_list ap)
@@ -25,6 +25,18 @@ char *Str_Format(const char *fmt, ...)
     char *out = Str_VFormat(fmt, ap);
     va_end(ap);
     return out;
+}
+
+// Returns nonzero if the two strings are equal.
+int Str_Equals(const char *a, const char *b)
+{
+    return strcmp(a, b) == 0;
+}
+
+// Returns nonzero if str begins with prefix.
+int Str_StartsWith(const char *str, const char *prefix)
+{
+    return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
 // Changes or appends a file extension ('main.c' -> 'main.s').

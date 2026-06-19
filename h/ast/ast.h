@@ -1,22 +1,8 @@
-#ifndef CC_H
-#define CC_H
-
-#include <stdio.h>
-#include <stdlib.h>
-
-#include "asm.h"
+#ifndef AST_H
+#define AST_H
 
 // Maximum number of distinct string literals in one translation unit.
 #define MAX_STRINGS 1024
-
-// Prints a diagnostic and exits; shared by the lexer, parser and back end.
-#define error(...)                      \
-    do {                                \
-        fprintf(stderr, "cc: error: "); \
-        fprintf(stderr, __VA_ARGS__);   \
-        fprintf(stderr, "\n");          \
-        exit(1);                        \
-    } while (0)
 
 // The kind of an AST node.
 typedef enum {
@@ -120,37 +106,10 @@ Ast_Var *Ast_DeclareVar(const char *name);
 // Returns the list of locals declared in the current scope.
 Ast_Var *Ast_CurrentLocals(void);
 
-// Emits x86-64 assembly (System V AMD64, AT&T syntax) for the program to out.
-void Gen_Codegen(FILE *out, Ast_Func *prog);
+// Returns the number of interned string literals.
+int Ast_StringCount(void);
 
-// Returns the next unique label number.
-int Gen_Count(void);
+// Returns the interned string literal in the given slot.
+char *Ast_StringAt(int idx);
 
-// Pushes %rax onto the stack and tracks the depth.
-void Gen_EmitPush(void);
-
-// Pops the top of the stack into reg and tracks the depth.
-void Gen_EmitPop(Asm_Reg reg);
-
-// Rounds n up to the nearest multiple of align.
-int Gen_AlignTo(int n, int align);
-
-// Computes the address of an lvalue into %rax.
-void Gen_EmitAddr(Ast_Node *node);
-
-// Emits code for an expression, leaving its result in %rax.
-void Gen_EmitExpr(Ast_Node *node);
-
-// Emits code for a statement.
-void Gen_EmitStmt(Ast_Node *node);
-
-// Assigns each local a stack slot and records the frame size.
-void Gen_AssignLvarOffsets(Ast_Func *func);
-
-// Emits the .rodata section holding all string literals.
-void Gen_EmitDataSection(void);
-
-// Emits the .text section: prologue, body and epilogue for each function.
-void Gen_EmitTextSection(Ast_Func *prog);
-
-#endif // CC_H
+#endif // AST_H

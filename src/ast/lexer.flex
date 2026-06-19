@@ -9,7 +9,7 @@
 %{
 #include <stdlib.h>
 #include <string.h>
-#include "cc.h"
+#include "common.h"
 #include "parser.tab.h"
 
 /* Decode a C string/char literal body (without the surrounding quotes),

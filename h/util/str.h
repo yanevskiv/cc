@@ -12,4 +12,10 @@ char *Str_VFormat(const char *fmt, va_list ap) __attribute__((format(printf, 1, 
 // Changes or appends a file extension ('main.c' -> 'main.s').
 char *Str_ChangeOrAppendExt(const char *input, const char *suffix);
 
+// Returns nonzero if the two strings are equal.
+int Str_Equals(const char *a, const char *b);
+
+// Returns nonzero if str begins with prefix.
+int Str_StartsWith(const char *str, const char *prefix);
+
 #endif // STR_H

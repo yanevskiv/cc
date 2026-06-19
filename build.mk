@@ -54,6 +54,7 @@ run: all
 	@for bin in $(BINS); do \
 		echo "=== $$bin ==="; \
 		"./$$bin"; \
+		echo "(exit $$?)"; \
 	done
 
 clean:

@@ -9,13 +9,14 @@
  */
 
 %code requires {
-    #include "cc.h"
+    #include "ast/ast.h"
 }
 
 %{
 #include <stdio.h>
 #include <stdlib.h>
-#include "cc.h"
+#include "common.h"
+#include "ast/ast.h"
 
 int  yylex(void);
 extern int yylineno;

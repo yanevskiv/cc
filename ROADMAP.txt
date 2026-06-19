@@ -5,32 +5,59 @@
 
 Goal:
 
-    Today `cc` only emits x86-64 assembly text; the system `as` and `ld`
-    (via gcc) finish the job, and the programs call into libc.  The goal is
-    to control the entire process front to back, with no gcc, no `as`, no
-    `ld` and no libc: a C source becomes a static, freestanding ELF
-    executable produced entirely by `cc`.
+    Own the entire toolchain ourselves -- cc, as, ld, ar, objcopy, objdump
+    -- with no gcc, no GNU binutils and no libc.  A C source becomes a
+    static, freestanding ELF executable produced start to finish by tools
+    we wrote.
 
-    Because no symbol is external, there is nothing to link, so no linker
-    is needed.  The toolchain collapses to three pieces we own:
+    Unlike the first sketch (cc emits a static executable directly), we now
+    go through real, inspectable ELF objects, the way a normal toolchain
+    does:
 
-        C source --(front end, exists)--> AST
-        AST      --(Gen_*, exists)------> instruction list (symbolic labels)
-        instrs   --(Asm_* encoder, new)-> x86-64 machine code
-        + runtime + .rodata --(Elf_* writer, new)--> static ELF executable
+        foo.c  --cc-->  foo.o  (ET_REL) --\
+                                           ld --> a.out  (ET_EXEC)
+        libc.c --cc-->  libc.o (ET_REL) --/
+
+    Objects are honest ET_REL files: a section header table, .symtab,
+    .strtab and .rela.* relocations with real R_X86_64_* types and proper
+    symbol binding / visibility.  Our own ld resolves symbols across them
+    and applies the relocations.  Because we emit standard ELF, each tool
+    is checkable against its GNU counterpart: our .o should link with the
+    system ld, and our ld should link a system-produced .o.
+
+    Out of scope (for now): linker scripts, dynamic linking / shared
+    objects, PIE.  Only static linking, a -r (relocatable) output mode, and
+    simple section placement (-place=SEC@ADDR).
 
 Naming conventions:
 
     Ast_*   abstract syntax tree (front end)
     Gen_*   code generation (AST -> instruction list)
-    Asm_*   instruction IR, text printer and machine-code encoder
-    Elf_*   executable image: section buffers, symbols, ELF output
-    Str_*   string helpers
+    Asm_*   instruction IR, text printer, text parser and machine-code
+            encoder
+    Elf_*   ELF objects: read/write ET_REL and ET_EXEC, section buffers,
+            symbols, relocations, and the cross-object link core
+    As_*    assembler driver (build/bin/as): argument parsing over Asm_*
+    Ld_*    linker driver (build/bin/ld): argument parsing over Elf_*
+    Str_*   string helpers (incl. <regex.h> wrappers for the assembler)
+
+Tools (binaries):
+
+    build/bin/cc   .c -> .s (-S) | .o (-c) | a.out (default: compile + link)
+    build/bin/as   .s -> .o (ET_REL)
+    build/bin/ld   .o ... -> a.out | .o (-r)
+    [horizon]      ar (.a archives), objcopy, objdump
+
+    cc.c and ld.c each own an int main(); the common modules (elf.o,
+    asm.o, str.o, ...) link into both.  The Makefile builds shared objects
+    once and a per-tool main on top.
 
 Module dependency:
 
-    Gen_*  ->  Asm_*  ->  { Asm_PrintText -> .s            (debug / -S)
-                            Asm_Encode     -> Elf_* -> static ELF }
+    Gen_*  ->  Asm_*  ->  { Asm_PrintText -> .s              (debug / -S)
+                            Asm_Encode     -> Elf_* (ET_REL)  (-c)  }
+    As_*   ->  Asm_Parse (.s -> IR) -> Asm_Encode -> Elf_* (ET_REL)
+    Ld_*   ->  Elf_* (read ET_REL, link, write ET_EXEC)
 
 --------------------------------------------------------------------------
 
@@ -43,105 +70,152 @@ Stage 1 -- Asm_* instruction IR (no behavior change)   [DONE]
 
     New files: h/asm.h, src/asm.c
 
-    Types:   Asm_Reg, Asm_Op, Asm_Operand (REG/IMM/MEM/RIP/LABEL),
-             Asm_Item (LABEL/INSTR/SECTION/GLOBL/BYTES)
+Stage 2 -- Asm_* encoder + direct static ELF (trivial program)   [DONE]
 
-    Prefer one thin function per instruction over a generic switch.  Each
-    is a one-liner that fills an Asm_Item and appends; args follow AT&T
-    src,dst order.  The per-opcode complexity then lives only in the
-    Stage 2 encoder, as a small encoding-class table -- not in the builder
-    or the text printer.
-
-    Verb is "Emit" -- the standard code-generator verb (GCC emit_insn,
-    LLVM emitInstruction/emitLabel) and already the back end's convention
-    here (Gen_EmitLine/Gen_EmitExpr/...).  It never collides with an x86
-    mnemonic, unlike Add* (AddAdd) or Push* (PushPush).
-
-    Per-instruction builders:
-        Asm_EmitAdd/Sub/Imul/Cmp(src, dst)      reg,reg ALU
-        Asm_EmitIdiv/Neg(reg)   Asm_EmitCqo()
-        Asm_EmitSete/Setne/Setl/Setle(reg)
-        Asm_EmitMovzb(src8, dst64)
-        Asm_EmitCmpImm(imm, dst)   Asm_EmitAddImm/SubImm(imm, dst)
-        Asm_EmitMovRR(src, dst)    Asm_EmitMovImm(imm, dst)
-        Asm_EmitMovLoad(base, disp, dst)
-        Asm_EmitMovStore(src, base, disp)
-        Asm_EmitLea(base, disp, dst)   Asm_EmitLeaRip(label, dst)
-        Asm_EmitPush(reg)   Asm_EmitPop(reg)
-        Asm_EmitJmp/Je/Call(label)   Asm_EmitRet()   Asm_EmitSyscall()
-
-    Structure: Asm_EmitLabel/EmitSection/EmitGlobl/EmitBytes; each builder
-        is a 1-liner over a private Asm_Emit(op, dst, src) core plus
-        operand constructors (kept for arbitrary instructions).
-    Output:  Asm_PrintText(out) -- generic (mnemonic name table + operand
-             formatter keyed on operand kind), not a per-opcode switch.
-
-    Gen_* keeps its structure; only leaf calls change, e.g.
-        Gen_EmitLine("  add %%rdi, %%rax");  ->  Asm_EmitAdd(ASM_REG_RDI,
-                                                            ASM_REG_RAX);
-        Gen_EmitLine("  je .L.else.%d", n);  ->  Asm_EmitJe(
-                                                  Str_Format(".L.else.%d", n));
-    (Gen_EmitPush/Pop keep depth tracking and call Asm_EmitPush/Pop.)
-    Label names go through a Str_Format() helper.
-
-    Done when: generated .s is identical (or trivially equivalent) and
-    `make test` still passes through as/ld unchanged.
-
-Stage 2 -- Asm_* encoder + Elf_* writer (trivial program -> ELF)
-
-    Add a second consumer of the same list: Asm_Encode() walks the items
-    and emits machine-code bytes into an Elf_* image; Elf_Finish()
-    serializes it as a standalone static executable.
+    A second consumer of the same list: Asm_Encode() walks the items and
+    emits machine-code bytes into an Elf_* image; Elf_Finish() serializes
+    a standalone static ET_EXEC.  Branches write a rel32 placeholder + a
+    fixup, resolved internally once vaddrs are known.  No section header
+    or symbol table -- just ELF header + one PT_LOAD + bytes.
 
     New files: h/elf.h, src/elf.c
 
-    Elf image owns section buffers, symbols and fixups:
-        Elf_ChangeSection, Elf_CurrentOffset,
-        Elf_WriteByte, Elf_Write32, Elf_Write64, Elf_WriteBytes,
-        Elf_AddSymbol, Elf_AddRel32, Elf_Finish(out, entry)
+    Done (met): `cc ret42.c -o a.out && ./a.out; echo $?` prints 42, no
+    as/ld/gcc.  This direct path is the bootstrap; it stays as the default
+    until ld (Stage 5) takes over, then becomes a debug curiosity.
 
-    Encoder emits REX.W / opcode / ModRM / disp / imm for the closed
-    opcode set.  Branches write a rel32 placeholder + Elf_AddRel32(target);
-    Elf_Finish resolves them once vaddrs are known.
+Stage 3 -- ELF relocatable objects (cc -c -> .o)
 
-    ELF layout: static ET_EXEC, base 0x400000, file offset 0 -> base so
-    vaddr = base + file_offset.  ELF header + one PT_LOAD program header +
-    section bytes.  No section-header or symbol table needed to run.
+    Grow Elf_* from "write one finished executable" to "write a real
+    relocatable object", and add `cc -c`.  The encoder stops resolving
+    branch/data fixups itself and instead records relocations against
+    named symbols for the linker to resolve later.
 
-    Hand-build a tiny _start (call main; exit via syscall) as Asm_* items
-    so it flows through the same encoder; entry = _start.
+    Elf_* gains, on the write side:
+        - section header table (.text, .rodata, .symtab, .strtab,
+          .rela.text, .rela.rodata, .shstrtab)
+        - a symbol table: STT_FUNC / STT_OBJECT / STT_NOTYPE, binding
+          STB_LOCAL vs STB_GLOBAL (file-locals like .L labels stay LOCAL),
+          visibility STV_DEFAULT, and SHN_UNDEF for references with no
+          local definition (e.g. a call to putchar)
+        - relocations: R_X86_64_PC32 / PLT32 for call/jmp/rip-relative,
+          R_X86_64_32S / 64 for absolute data addresses, with addends
 
-    Done when: `cc ret42.c -o a.out && ./a.out; echo $?` prints 42, with
-    no as, ld or gcc.
+    cc grows -c (emit foo.o, ET_REL).  Default output and -S are unchanged.
 
-Stage 3 -- freestanding runtime (fizzbuzz runs standalone)
+    Done when: `cc -c foo.c -o foo.o` yields a valid ET_REL --
+    `readelf -ar foo.o` and `objdump -dr foo.o` agree with it, and the
+    *system* ld links our foo.o into a working executable (correctness
+    check against a known-good linker).
 
-    Grow _start into a small runtime providing the libc functions the
-    programs actually use, built on raw syscalls: write(), an integer ->
-    decimal helper, and a printf supporting plain text, %s and %d.
-    User programs keep declaring `int printf(...)`; they now bind to ours.
+Stage 4 -- Elf_* link core (link two or more objects)
 
-    Done when: `cc fizzbuzz.c -o fizzbuzz && ./fizzbuzz` prints the
-    expected output with no external dependencies.
+    Teach Elf_* the other half: read ET_REL objects back in and combine
+    them.  Merge same-type sections, assign addresses, build one global
+    symbol table, resolve every SHN_UNDEF against a definition in another
+    object, apply each relocation, and emit a static ET_EXEC.
 
-Stage 4 -- make cc the driver; retire as/ld
+    Elf_* gains, on the read/link side:
+        - ELF object reader (parse Ehdr / section headers / symtab /
+          strtab / rela)
+        - section merge with per-input base offsets; rebase symbol values
+          and relocation sites into the merged image
+        - global symbol resolution (multiple-definition / undefined-symbol
+          diagnostics)
+        - relocation application for the R_X86_64_* types above
 
-    Default output becomes a linked ELF executable; -S dumps the text
-    asm (debug), -c reserved.  build.mk collapses to a single rule:
+    Exercised this stage via a small internal harness / temporary hook;
+    the user-facing driver is Stage 5.
+
+    Done when: in the harness, Elf_* links foo.o + bar.o into an a.out
+    that runs and returns the expected status, no system ld involved.
+
+Stage 5 -- ld driver (build/bin/ld)
+
+    Wrap the Stage 4 link core in a real tool.  New files h/ld.h, src/ld.c
+    provide ld's own int main() and argument parsing; all ELF work stays
+    in Elf_*.  The Makefile splits into shared objects + per-tool mains and
+    starts building build/bin/ld alongside build/bin/cc.
+
+    ld command line (deliberately tiny):
+        ld a.o b.o -o a.out                       static link -> ET_EXEC
+        ld -r a.o b.o -o ab.o                      merge, keep relocs -> ET_REL
+        ld -place=text@0x08000000 -place=data@0x20000000 a.o -o a.out
+                                                   explicit section placement
+
+    Done when: `cc -c a.c && cc -c b.c && ld a.o b.o -o a.out && ./a.out`
+    works with no system ld; -r round-trips (its output relinks); -place
+    is honored; and our ld also links a .o produced by the system as/cc.
+
+Stage 6 -- as (assembler: .s -> .o)
+
+    The encoder and the ET_REL writer already exist (Stages 2-3), so the
+    assembler is mostly a front end: parse AT&T text into the same Asm_*
+    instruction list, then reuse Asm_Encode + the Elf_* object writer.  It
+    is the inverse of Asm_PrintText, and because cc -S emits exactly the
+    syntax as parses, the two round-trip by construction.
+
+    Parsing is line-oriented and regex-driven: extend Str_* with thin
+    <regex.h> wrappers (Str_RegexMatch, Str_RegexExtract), then match the
+    three line shapes -- `label:`, `.directive args`, `mnemonic op, op`.
+    Operands cover the forms the printer emits: %reg, $imm, disp(%base),
+    sym(%rip), sym.  A new Asm_Parse (in asm.c, paired with Asm_PrintText)
+    turns text into the IR; src/as.c (As_*) is just main + file I/O +
+    argument parsing.
+
+    Directive set is small -- what cc -S emits, plus a little:
+        .text .data .section .rodata .globl/.global .extern
+        .string .byte .word .long .quad .skip .align .file
+    No .macro, no .if, no AVX-512 -- only the closed instruction set we
+    already encode.  Undefined symbols (e.g. call printf) become
+    R_X86_64_PLT32/PC32 relocations, exactly as cc -c records them.
+
+    Done when: `cc -S foo.c -o foo.s && as foo.s -o foo.o` yields an object
+    equal in effect to `cc -c foo.c -o foo.o` (both link and run the same),
+    and our as assembles a hand-written runtime .s; cross-check: the system
+    as accepts the same .s, and our as feeds the system ld.
+
+Stage 7 -- freestanding libc as a linked object
+
+    With objects, a linker and an assembler in hand, the runtime is just
+    more input.  Write the crt in assembly -- _start and the one
+    irreducible byte-out primitive putchar -- and assemble it to crt0.o
+    with our own as.  The rest of libc is written in our own C and compiled
+    to libc.o.  The standard library grows with the language: putd(int)
+    now; printf, puts, char* helpers as char / pointers / varargs land.
+
+    Done when: `cc putd.c -o putd && ./putd` (cc drives cc -c + as + ld
+    over the crt/libc objects) prints a number with nothing but our tools.
+
+Stage 8 -- cc as the driver; retire system as/ld
+
+    Default cc output becomes a fully linked ET_EXEC: cc compiles each
+    input to a (temp) .o and invokes our ld.  -S dumps text asm, -c stops
+    at the object.  build.mk collapses to a single rule:
         user/%: user/%.c ; $(CC) -o $@ $<
-    Remove as/ld from the pipeline.
+    Remove the system as/ld from the pipeline.
 
-    Done when: nothing outside cc touches the .c -> executable path.
+    Done when: nothing outside our own tools touches the .c -> executable
+    path.
 
 --------------------------------------------------------------------------
 
+Horizon (after the core pipeline is self-hosting):
+
+    ar        static archives, so libc.o becomes libc.a and ld pulls only
+              the objects a program references.
+    objcopy   section/format surgery on our own objects.
+    objdump   disassemble + dump our own objects (closes the loop: every
+              tool checkable without GNU binutils).
+
 Notes:
 
-    - Stages 1 and 2 are independently shippable: stage 1 leaves the old
-      pipeline fully working; stage 2 adds the new path behind a flag
-      (default ELF, -S text dump) without removing as/ld until stage 3/4
-      prove the runtime.
-    - Single translation unit per program -> a relocatable .o + linker
-      buys nothing; emit the static executable directly.
-    - <elf.h> provides Elf64_Ehdr/Elf64_Phdr; may be hand-defined to stay
-      fully dependency-free.
+    - Stages stay independently shippable: Stage 2's direct-ELF path keeps
+      working until Stage 5's ld replaces it as the default.
+    - We emit standard ELF on purpose -- cross-checking each tool against
+      its GNU counterpart (our .o + system ld, our ld + system .o) is the
+      cheapest correctness test we have until objdump exists.
+    - Single static link only: no linker scripts, no dynamic linking, no
+      PIE.  -place covers the one layout knob we actually want.
+    - <elf.h> provides Elf64_Ehdr/Shdr/Sym/Rela; hand-defined to stay
+      dependency-free.
