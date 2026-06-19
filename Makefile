@@ -1,10 +1,9 @@
 # Top-level Makefile for the `cc` compiler.
 #
 # Layout:
-#   lex/    flex (.flex) and bison (.y) grammar sources
-#   src/    compiler C sources       h/   compiler C headers
+#   src/    compiler C sources, flex (.flex) and bison (.y) grammar sources
+#   h/      compiler C headers
 #   test/   sample program to compile (test.c)
-#   mk/     build.mk, which becomes build/Makefile
 #   out/    intermediate artifacts: generated scanner/parser + object files
 #   build/  the deliverables only: cc, test.c, Makefile
 #
@@ -39,10 +38,10 @@ $(BUILD)/cc: $(OBJS) $(GEN_OBJS) | $(BUILD)
 
 # --- generated scanner and parser (live in out/) ---------------------------
 # bison emits the header that both the scanner and the C sources include.
-$(OUT)/parser.tab.c $(OUT)/parser.tab.h: lex/parser.y | $(OUT)
+$(OUT)/parser.tab.c $(OUT)/parser.tab.h: src/parser.y | $(OUT)
 	$(YACC) -d -o $(OUT)/parser.tab.c $<
 
-$(OUT)/lex.yy.c: lex/lexer.flex $(OUT)/parser.tab.h | $(OUT)
+$(OUT)/lex.yy.c: src/lexer.flex $(OUT)/parser.tab.h | $(OUT)
 	$(LEX) -o $@ $<
 
 # Generated code is compiled without -Wall/-Wextra (flex/bison output is noisy).
@@ -60,7 +59,7 @@ $(OUT)/%.o: src/%.c $(OUT)/parser.tab.h | $(OUT)
 $(BUILD)/test.c: test/test.c | $(BUILD)
 	cp $< $@
 
-$(BUILD)/Makefile: mk/build.mk | $(BUILD)
+$(BUILD)/Makefile: src/build.mk | $(BUILD)
 	cp $< $@
 
 $(OUT):
