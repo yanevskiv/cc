@@ -12,7 +12,7 @@ OBJS    := $(patsubst src/%.c,$(OUT)/%.o,$(SRCS))
 GEN_OBJS:= $(OUT)/lex.yy.o $(OUT)/parser.tab.o
 
 
-all: $(BUILD)/cc $(BUILD)/test.c $(BUILD)/Makefile
+all: $(BUILD)/cc $(BUILD)/fizzbuzz.c $(BUILD)/Makefile
 
 $(BUILD)/cc: $(OBJS) $(GEN_OBJS) | $(BUILD)
 	$(CC) $(CFLAGS) $(WARN) $^ -o $@
@@ -32,7 +32,7 @@ $(OUT)/parser.tab.o: $(OUT)/parser.tab.c
 $(OUT)/%.o: src/%.c $(OUT)/parser.tab.h | $(OUT)
 	$(CC) $(CFLAGS) $(WARN) -c $< -o $@
 
-$(BUILD)/test.c: test/test.c | $(BUILD)
+$(BUILD)/fizzbuzz.c: user/fizzbuzz.c | $(BUILD)
 	cp $< $@
 
 $(BUILD)/Makefile: src/build.mk | $(BUILD)
