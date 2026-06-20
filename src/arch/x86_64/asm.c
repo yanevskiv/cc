@@ -27,7 +27,9 @@ struct Asm_x86_64_Item {
     Asm_x86_64_Operand   ai_src;      // INSTR
     const char   *ai_label;    // LABEL / GLOBL
     const char   *ai_text;     // DIRECTIVE
-    Asm_x86_64_Section   ai_section;  // SECTION
+    const char   *ai_secname;  // SECTION
+    uint32_t      ai_sectype;  // SECTION
+    uint64_t      ai_secflags; // SECTION
     unsigned char *ai_bytes;   // BYTES
     int           ai_nbytes;   // BYTES
 };
@@ -159,11 +161,13 @@ void Asm_x86_64_EmitLabel(const char *name, ...)
     va_end(ap);
 }
 
-// Emits a switch to the given output section.
-void Asm_x86_64_EmitSection(Asm_x86_64_Section sec)
+// Emits a switch to the named output section, created with type and flags.
+void Asm_x86_64_EmitSection(const char *name, uint32_t type, uint64_t flags)
 {
     Asm_x86_64_Item *item = Asm_x86_64_New(ASM_X86_64_ITEM_SECTION);
-    item->ai_section = sec;
+    item->ai_secname  = name;
+    item->ai_sectype  = type;
+    item->ai_secflags = flags;
 }
 
 // Marks a symbol global, named by a printf-style format.
@@ -527,8 +531,11 @@ void Asm_x86_64_PrintText(FILE *out)
                 fprintf(out, "  .globl %s\n", item->ai_label);
             } break;
             case ASM_X86_64_ITEM_SECTION: {
-                fprintf(out, "%s\n", item->ai_section == ASM_X86_64_SECTION_TEXT
-                                         ? "  .text" : "  .section .rodata");
+                if (strcmp(item->ai_secname, ".text") == 0) {
+                    fprintf(out, "  .text\n");
+                } else {
+                    fprintf(out, "  .section %s\n", item->ai_secname);
+                }
             } break;
             case ASM_X86_64_ITEM_BYTES: {
                 for (int i = 0; i < item->ai_nbytes; i++) {
@@ -942,16 +949,10 @@ static int Asm_x86_64_IsGlobl(const char *name)
     return 0;
 }
 
-// Switches the current section to .text or .rodata, creating it on first use.
-static void Asm_x86_64_SelectSection(Asm_x86_64_Section sec)
+// Switches the current section to the named one, creating it on first use.
+static void Asm_x86_64_SelectSection(const char *name, uint32_t type, uint64_t flags)
 {
-    if (sec == ASM_X86_64_SECTION_TEXT) {
-        Asm_x86_64_Cur = Elf_SectionGet(Asm_x86_64_Out, ".text", ELF_SHT_PROGBITS,
-                                        ELF_SHF_ALLOC | ELF_SHF_EXECINSTR);
-    } else {
-        Asm_x86_64_Cur = Elf_SectionGet(Asm_x86_64_Out, ".rodata", ELF_SHT_PROGBITS,
-                                        ELF_SHF_ALLOC);
-    }
+    Asm_x86_64_Cur = Elf_SectionGet(Asm_x86_64_Out, name, type, flags);
 }
 
 // Creates a symbol for every label (globals get a FUNC/OBJECT type by section),
@@ -996,7 +997,7 @@ Elf *Asm_x86_64_BuildObject(void)
     Asm_x86_64_NumLabels = 0;
     Asm_x86_64_NumGlobls = 0;
     Asm_x86_64_NumFixes  = 0;
-    Asm_x86_64_SelectSection(ASM_X86_64_SECTION_TEXT);
+    Asm_x86_64_SelectSection(".text", ELF_SHT_PROGBITS, ELF_SHF_ALLOC | ELF_SHF_EXECINSTR);
 
     for (Asm_x86_64_Item *item = Asm_x86_64_Head; item; item = item->ai_next) {
         switch (item->ai_kind) {
@@ -1007,7 +1008,7 @@ Elf *Asm_x86_64_BuildObject(void)
                 Asm_x86_64_RecordLabel(item->ai_label);
             } break;
             case ASM_X86_64_ITEM_SECTION: {
-                Asm_x86_64_SelectSection(item->ai_section);
+                Asm_x86_64_SelectSection(item->ai_secname, item->ai_sectype, item->ai_secflags);
             } break;
             case ASM_X86_64_ITEM_BYTES: {
                 Asm_x86_64_EmitRaw(item->ai_bytes, item->ai_nbytes);

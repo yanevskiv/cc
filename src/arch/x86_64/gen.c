@@ -315,7 +315,7 @@ void Gen_x86_64_EmitDataSection(void)
     if (count == 0) {
         return;
     }
-    Asm_x86_64_EmitSection(ASM_X86_64_SECTION_RODATA);
+    Asm_x86_64_EmitSection(".rodata", ELF_SHT_PROGBITS, ELF_SHF_ALLOC);
     for (int i = 0; i < count; i++) {
         char *str = Ast_StringAt(i);
         Asm_x86_64_EmitLabel(".Lstr%d", i);
@@ -377,7 +377,7 @@ static void Gen_x86_64_EmitFunctions(Ast_Func *prog)
 // Emits the .text section; freestanding output also gets a _start runtime.
 void Gen_x86_64_EmitTextSection(Ast_Func *prog, int freestanding)
 {
-    Asm_x86_64_EmitSection(ASM_X86_64_SECTION_TEXT);
+    Asm_x86_64_EmitSection(".text", ELF_SHT_PROGBITS, ELF_SHF_ALLOC | ELF_SHF_EXECINSTR);
     if (freestanding) {
         Gen_x86_64_EmitStartup();
     }

@@ -1,6 +1,7 @@
 #ifndef ASM_X86_64_H
 #define ASM_X86_64_H
 
+#include <stdint.h>
 #include <stdio.h>
 
 // An ELF object the back end builds; defined in util/elf.h.
@@ -8,26 +9,49 @@ typedef struct Elf Elf;
 
 // Registers
 typedef enum {
-    ASM_X86_64_REG_RAX = 0, ASM_X86_64_REG_RCX, ASM_X86_64_REG_RDX, ASM_X86_64_REG_RBX,
-    ASM_X86_64_REG_RSP,     ASM_X86_64_REG_RBP, ASM_X86_64_REG_RSI, ASM_X86_64_REG_RDI,
-    ASM_X86_64_REG_R8,      ASM_X86_64_REG_R9,  ASM_X86_64_REG_R10, ASM_X86_64_REG_R11,
-    ASM_X86_64_REG_R12,     ASM_X86_64_REG_R13, ASM_X86_64_REG_R14, ASM_X86_64_REG_R15
+    ASM_X86_64_REG_RAX = 0,
+    ASM_X86_64_REG_RCX,
+    ASM_X86_64_REG_RDX,
+    ASM_X86_64_REG_RBX,
+    ASM_X86_64_REG_RSP,
+    ASM_X86_64_REG_RBP,
+    ASM_X86_64_REG_RSI,
+    ASM_X86_64_REG_RDI,
+    ASM_X86_64_REG_R8,
+    ASM_X86_64_REG_R9,
+    ASM_X86_64_REG_R10,
+    ASM_X86_64_REG_R11,
+    ASM_X86_64_REG_R12,
+    ASM_X86_64_REG_R13,
+    ASM_X86_64_REG_R14,
+    ASM_X86_64_REG_R15
 } Asm_x86_64_Reg;
 
 // Opcodes
 typedef enum {
-    ASM_X86_64_OP_MOV, ASM_X86_64_OP_LEA, ASM_X86_64_OP_PUSH, ASM_X86_64_OP_POP,
-    ASM_X86_64_OP_ADD, ASM_X86_64_OP_SUB, ASM_X86_64_OP_IMUL, ASM_X86_64_OP_IDIV, ASM_X86_64_OP_CQO, ASM_X86_64_OP_NEG,
-    ASM_X86_64_OP_CMP, ASM_X86_64_OP_SETE, ASM_X86_64_OP_SETNE, ASM_X86_64_OP_SETL, ASM_X86_64_OP_SETLE,
-    ASM_X86_64_OP_MOVZB, ASM_X86_64_OP_JMP, ASM_X86_64_OP_JE, ASM_X86_64_OP_JNE, ASM_X86_64_OP_CALL,
-    ASM_X86_64_OP_RET, ASM_X86_64_OP_SYSCALL
+    ASM_X86_64_OP_MOV = 0,
+    ASM_X86_64_OP_LEA,
+    ASM_X86_64_OP_PUSH,
+    ASM_X86_64_OP_POP,
+    ASM_X86_64_OP_ADD,
+    ASM_X86_64_OP_SUB,
+    ASM_X86_64_OP_IMUL,
+    ASM_X86_64_OP_IDIV,
+    ASM_X86_64_OP_CQO,
+    ASM_X86_64_OP_NEG,
+    ASM_X86_64_OP_CMP,
+    ASM_X86_64_OP_SETE,
+    ASM_X86_64_OP_SETNE,
+    ASM_X86_64_OP_SETL,
+    ASM_X86_64_OP_SETLE,
+    ASM_X86_64_OP_MOVZB,
+    ASM_X86_64_OP_JMP,
+    ASM_X86_64_OP_JE,
+    ASM_X86_64_OP_JNE,
+    ASM_X86_64_OP_CALL,
+    ASM_X86_64_OP_RET,
+    ASM_X86_64_OP_SYSCALL
 } Asm_x86_64_Op;
-
-// Output sections we place code and data into.
-typedef enum {
-    ASM_X86_64_SECTION_TEXT,
-    ASM_X86_64_SECTION_RODATA
-} Asm_x86_64_Section;
 
 // How an operand is addressed.
 typedef enum {
@@ -54,7 +78,7 @@ void Asm_x86_64_Reset(void);
 
 // Non-instruction items
 void Asm_x86_64_EmitLabel(const char *name, ...) __attribute__((format(printf, 1, 2)));
-void Asm_x86_64_EmitSection(Asm_x86_64_Section sec);
+void Asm_x86_64_EmitSection(const char *name, uint32_t type, uint64_t flags);
 void Asm_x86_64_EmitGlobl(const char *name, ...) __attribute__((format(printf, 1, 2)));
 void Asm_x86_64_EmitBytes(const void *data, int len);
 void Asm_x86_64_EmitDirective(const char *text, ...) __attribute__((format(printf, 1, 2)));
