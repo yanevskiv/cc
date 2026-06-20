@@ -16,16 +16,27 @@ C code:
         Code is grouped into modules, each with a PascalCase prefix
         naming its area:
 
-            Ast_*   abstract syntax tree (front end) Gen_*   code
-            generation (AST -> instruction list) Asm_*   instruction IR,
-            text printer and machine-code encoder Elf_*   executable
-            image: section buffers, symbols, ELF output Str_*   string
-            helpers
+            Ast_*   abstract syntax tree (front end)
+            Gen_*   code generation (AST -> instruction list)
+            Asm_*   instruction IR and AT&T text printer
+            Enc_*   machine-code encoder (instruction list -> ELF object)
+            Elf_*   ELF image: section buffers, symbols, object output
+            Rel_*   architecture relocation types and patching
+            Link_*  static linker driver
+            Str_*   string helpers
+
+        An architecture-specific module carries an arch infix:
+        Asm_x86_64_*, Enc_x86_64_*, Gen_x86_64_*, Rel_x86_64_*.
 
         Every function and global is Prefix_PascalCase, e.g. Gen_EmitExpr,
-        Asm_EmitAdd, Ast_Program.  A module's public names live in
-        h/<mod>.h; anything private is `static` in src/<mod>.c and keeps
-        the same prefix.
+        Asm_EmitAdd, Ast_Program.  A module's names live in h/<mod>.h, and
+        the header is meant to map the source: it declares the functions
+        and the principal structs the .c file defines, in the same order,
+        so a reader can see the shape of the .c from the .h alone.  Only a
+        truly local helper -- one nobody outside the file could ever want
+        to call -- stays `static` and out of the header.  A module's
+        file-scope state (its static variables) and private #defines stay
+        in the .c; the header maps the interface, not the storage.
 
         Struct fields take a short lower-case tag derived from the type,
         used on every field of that struct:
@@ -39,11 +50,12 @@ C code:
         In a `.c` file, every function and every global variable
         (including macros) has one short `//` line directly above it, no
         blank line in between, saying what it is -- just like cc.c.  A
-        `.h` file instead gives an overview: group related declarations,
-        separate the groups with a blank line and put one `//` line above
-        each group rather than repeating a comment per prototype, the way
-        str.h and elf.h do.  Repeating in the header what the source
-        already documents is just noise.
+        `.h` file lists those same declarations grouped for overview:
+        gather related ones, separate the groups with a blank line and put
+        one `//` line above each group, the way str.h and elf.h do.  The
+        header names every declaration the file exports but carries only
+        the group label, never a copy of each function's description --
+        that descriptive comment lives once, in the .c.
 
         A header group comment only names the group; it does not describe
         it, and it carries no trailing period because it is a label, not a

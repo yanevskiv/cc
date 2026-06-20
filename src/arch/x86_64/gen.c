@@ -5,6 +5,7 @@
 #include "util/elf.h"
 #include "util/link.h"
 #include "arch/x86_64/asm.h"
+#include "arch/x86_64/enc.h"
 #include "arch/x86_64/gen.h"
 
 // Number of integer arguments the ABI passes in registers; the rest go on the stack.
@@ -409,7 +410,7 @@ void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
 void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 1);
-    Elf          *elf  = Asm_x86_64_BuildObject();
+    Elf          *elf  = Enc_x86_64_Object();
     Link_Options  opts = { .lo_entry = "_start" };
     Link_Exec(elf, &opts);
     Elf_WriteFile(elf, out);
@@ -422,7 +423,7 @@ void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 0);
-    Elf *elf = Asm_x86_64_BuildObject();
+    Elf *elf = Enc_x86_64_Object();
     Elf_WriteFile(elf, out);
     Elf_Free(elf);
 }
@@ -432,7 +433,7 @@ void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
 void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 1);
-    Elf *elf = Asm_x86_64_BuildObject();
+    Elf *elf = Enc_x86_64_Object();
     Elf_WriteFile(elf, out);
     Elf_Free(elf);
 }
