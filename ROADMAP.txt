@@ -172,7 +172,7 @@ Stage 5a -- ld driver (build/bin/ld)   [DONE]
     -place only knows text/data and the reader/writer/encoder cannot share
     a symbol or a section.  See ELF.txt (autopsy) and ELF_REWRITE.txt.
 
-Stage 5b -- ELF rewrite: generic ELF library + link/reloc split
+Stage 5b -- ELF rewrite: generic ELF library + link/reloc split   [DONE]
 
     Replace the Stage-5a ELF code with one in-memory ELF model and small,
     single-purpose function families, then lift all linker policy out of
@@ -222,6 +222,18 @@ Stage 5b -- ELF rewrite: generic ELF library + link/reloc split
     behavior change; elf.c names no section and calls no exit(); link/reloc
     policy lives in link.c/reloc.c; and -place accepts an arbitrary section
     name -- proven by placing a third, differently-named section.
+
+    Done (met): elf.c is the generic library (Elf_Buf/Section/Symbol/Rela/
+    Read/Write over an opaque Elf of Elf_Sec + Elf_Sym); it names no section
+    and never calls exit().  Link policy is in src/util/link.c (Link_Run /
+    Link_Merge / Link_Exec) and relocation in src/arch/x86_64/reloc.c
+    (Reloc_Apply, the only reader of R_X86_64_*).  cc's back end builds the
+    object in asm.c (Asm_x86_64_BuildObject) and writes via Elf_Write; the
+    freestanding exec is just Link_Exec over that one object.  ld parses args
+    and calls Link_Run + Elf_Write.  `make stage5` passes (static link, -r
+    round-trip, -place) and the GNU cross-checks hold: readelf reads our
+    objects, system ld links them to a 42, and -place works by literal ELF
+    section name (.text/.rodata), not only the text/data aliases.
 
 Stage 6 -- as (assembler: .s -> .o)
 

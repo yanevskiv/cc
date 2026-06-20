@@ -3,7 +3,10 @@
 
 #include <stdio.h>
 
-// x86-64 registers, numbered by their hardware encoding.
+// An ELF object the back end builds; defined in util/elf.h.
+typedef struct Elf Elf;
+
+// Registers
 typedef enum {
     ASM_X86_64_REG_RAX = 0, ASM_X86_64_REG_RCX, ASM_X86_64_REG_RDX, ASM_X86_64_REG_RBX,
     ASM_X86_64_REG_RSP,     ASM_X86_64_REG_RBP, ASM_X86_64_REG_RSI, ASM_X86_64_REG_RDI,
@@ -11,7 +14,7 @@ typedef enum {
     ASM_X86_64_REG_R12,     ASM_X86_64_REG_R13, ASM_X86_64_REG_R14, ASM_X86_64_REG_R15
 } Asm_x86_64_Reg;
 
-// Every opcode the back end emits -- a small, closed set.
+// Opcodes
 typedef enum {
     ASM_X86_64_OP_MOV, ASM_X86_64_OP_LEA, ASM_X86_64_OP_PUSH, ASM_X86_64_OP_POP,
     ASM_X86_64_OP_ADD, ASM_X86_64_OP_SUB, ASM_X86_64_OP_IMUL, ASM_X86_64_OP_IDIV, ASM_X86_64_OP_CQO, ASM_X86_64_OP_NEG,
@@ -40,53 +43,59 @@ typedef enum {
 typedef struct {
     Asm_x86_64_OperandKind ao_kind;
     Asm_x86_64_Reg         ao_reg;    // REG, or base of MEM
-    long            ao_imm;    // IMM
-    int             ao_disp;   // MEM displacement
-    const char     *ao_label;  // RIP / LABEL
-    int             ao_width;  // REG width in bits: 8 or 64
+    long                   ao_imm;    // IMM
+    int                    ao_disp;   // MEM displacement
+    const char            *ao_label;  // RIP / LABEL
+    int                    ao_width;  // REG width in bits: 8 or 64
 } Asm_x86_64_Operand;
 
-// Clears the instruction list before a fresh translation unit.
+// Reset
 void Asm_x86_64_Reset(void);
 
-// Non-instruction items.  The const char * arguments are printf-style formats.
+// Non-instruction items
 void Asm_x86_64_EmitLabel(const char *name, ...) __attribute__((format(printf, 1, 2)));
 void Asm_x86_64_EmitSection(Asm_x86_64_Section sec);
 void Asm_x86_64_EmitGlobl(const char *name, ...) __attribute__((format(printf, 1, 2)));
 void Asm_x86_64_EmitBytes(const void *data, int len);
 void Asm_x86_64_EmitDirective(const char *text, ...) __attribute__((format(printf, 1, 2)));
 
-// Per-instruction helpers.  Register arguments follow AT&T src,dst order.
+// Register-to-register
 void Asm_x86_64_EmitAdd(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitSub(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitImul(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitCmp(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitMovRR(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
 
+// Single register
 void Asm_x86_64_EmitIdiv(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitNeg(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitCqo(void);
 
+// Condition flags to a register
 void Asm_x86_64_EmitSete(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitSetne(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitSetl(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitSetle(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitMovzb(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
 
+// Immediate operands
 void Asm_x86_64_EmitCmpImm(long imm, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitMovImm(long imm, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitMovImm8(long imm, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitAddImm(long imm, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitSubImm(long imm, Asm_x86_64_Reg dst);
 
+// Memory loads, stores and addresses
 void Asm_x86_64_EmitMovLoad(Asm_x86_64_Reg base, int disp, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitMovStore(Asm_x86_64_Reg src, Asm_x86_64_Reg base, int disp);
 void Asm_x86_64_EmitLea(Asm_x86_64_Reg base, int disp, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitLeaRip(Asm_x86_64_Reg dst, const char *label, ...) __attribute__((format(printf, 2, 3)));
 
+// Stack
 void Asm_x86_64_EmitPush(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitPop(Asm_x86_64_Reg reg);
 
+// Jumps, calls and returns
 void Asm_x86_64_EmitJmp(const char *label, ...) __attribute__((format(printf, 1, 2)));
 void Asm_x86_64_EmitJe(const char *label, ...) __attribute__((format(printf, 1, 2)));
 void Asm_x86_64_EmitJne(const char *label, ...) __attribute__((format(printf, 1, 2)));
@@ -94,10 +103,8 @@ void Asm_x86_64_EmitCall(const char *label, ...) __attribute__((format(printf, 1
 void Asm_x86_64_EmitRet(void);
 void Asm_x86_64_EmitSyscall(void);
 
-// Walks the instruction list and writes AT&T-syntax assembly to out.
+// Back ends
 void Asm_x86_64_PrintText(FILE *out);
-
-// Walks the instruction list and encodes machine code into the ELF image.
-void Asm_x86_64_Encode(void);
+Elf *Asm_x86_64_BuildObject(void);
 
 #endif // ASM_X86_64_H

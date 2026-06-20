@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ast/ast.h"
 #include "util/elf.h"
+#include "util/link.h"
 #include "arch/x86_64/asm.h"
 #include "arch/x86_64/gen.h"
 
@@ -403,13 +404,16 @@ void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
     Asm_x86_64_PrintText(out);
 }
 
-// Encodes the whole program as a freestanding ELF executable to out.
+// Encodes the whole program as a freestanding ELF executable to out: the
+// single-module object is linked in place into a static ET_EXEC.
 void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 {
-    Elf_Reset();
     Gen_x86_64_BuildProgram(prog, 1);
-    Asm_x86_64_Encode();
-    Elf_FinishExec(out, "_start");
+    Elf          *elf  = Asm_x86_64_BuildObject();
+    Link_Options  opts = { .lo_entry = "_start" };
+    Link_Exec(elf, &opts);
+    Elf_WriteFile(elf, out);
+    Elf_Free(elf);
 }
 
 // Encodes the whole program as a relocatable ELF object (.o) to out.  Unlike
@@ -417,18 +421,18 @@ void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 // and leaves _start to the runtime, for a linker to resolve later.
 void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
 {
-    Elf_Reset();
     Gen_x86_64_BuildProgram(prog, 0);
-    Asm_x86_64_Encode();
-    Elf_FinishRel(out);
+    Elf *elf = Asm_x86_64_BuildObject();
+    Elf_WriteFile(elf, out);
+    Elf_Free(elf);
 }
 
 // Stage 4 harness: a relocatable object that also carries the _start runtime,
 // so the link core has an entry point until the Stage 7 crt supplies one.
 void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog)
 {
-    Elf_Reset();
     Gen_x86_64_BuildProgram(prog, 1);
-    Asm_x86_64_Encode();
-    Elf_FinishRel(out);
+    Elf *elf = Asm_x86_64_BuildObject();
+    Elf_WriteFile(elf, out);
+    Elf_Free(elf);
 }

@@ -17,9 +17,9 @@ LIB_OBJS  := $(patsubst src/%.c,$(OUT)/%.o,$(LIB_SRCS))
 GEN_OBJS  := $(OUT)/lex.yy.o $(OUT)/parser.tab.o
 
 # cc needs the front end (lexer/parser/AST), code generator and ELF writer;
-# ld needs only the self-contained ELF link core.
+# ld needs the ELF library plus the link/rel policy layer.
 CC_OBJS := $(OUT)/cc.o $(LIB_OBJS) $(GEN_OBJS)
-LD_OBJS := $(OUT)/ld.o $(OUT)/util/elf.o
+LD_OBJS := $(OUT)/ld.o $(OUT)/util/elf.o $(OUT)/util/link.o $(OUT)/arch/$(TARGET_ARCH)/rel.o
 
 CC_BIN := $(BUILD)/bin/$(TARGET_ARCH)-cc
 LD_BIN := $(BUILD)/bin/$(TARGET_ARCH)-ld

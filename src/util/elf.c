@@ -3,77 +3,34 @@
 #include <string.h>
 #include "util/elf.h"
 
-// Virtual address the executable is loaded at; file offset 0 maps here.
-#define ELF_BASE 0x400000
+// ELF identification bytes: 64-bit, little-endian, version 1.
+#define ELF_CLASS64  2
+#define ELF_DATA2LSB 1
+#define ELF_VERSION  1
 
-// Page size used to align the single loadable segment.
+// Virtual address an executable is loaded at, and the page size segments align.
+#define ELF_BASE 0x400000
 #define ELF_PAGE 0x1000
 
-// Largest number of symbols and fixups one program may define.
-#define ELF_MAX_SYMBOLS 4096
-#define ELF_MAX_RELS    4096
-#define ELF_MAX_GLOBALS 4096
-
-// ELF identification bytes: magic, 64-bit, little-endian, version 1.
-#define ELF_CLASS64 2
-#define ELF_DATA2LSB 1
-#define ELF_VERSION 1
-
-// Object types and target machine.
-#define ELF_TYPE_REL  1
-#define ELF_TYPE_EXEC 2
-#define ELF_MACHINE_X86_64 62
-
-// Loadable segment, readable and executable.
+// Loadable program-header segment, readable and executable.
 #define ELF_PT_LOAD 1
 #define ELF_PF_R 4
 #define ELF_PF_X 1
 
-// Section header types and flags.
-#define ELF_SHT_PROGBITS 1
-#define ELF_SHT_SYMTAB   2
-#define ELF_SHT_STRTAB   3
-#define ELF_SHT_RELA     4
-#define ELF_SHF_WRITE     0x1
-#define ELF_SHF_ALLOC     0x2
-#define ELF_SHF_EXECINSTR 0x4
-#define ELF_SHF_INFO_LINK 0x40
+// The undefined section index used by external references.
 #define ELF_SHN_UNDEF 0
 
-// Symbol binding (high nibble) and type (low nibble) of st_info.
-#define ELF_STB_LOCAL  0
-#define ELF_STB_GLOBAL 1
-#define ELF_STT_NOTYPE 0
-#define ELF_STT_OBJECT 1
-#define ELF_STT_FUNC   2
+// Packs and unpacks the symbol binding/type nibbles of st_info.
 #define ELF_ST_INFO(bind, type) (((bind) << 4) | ((type) & 0xF))
 #define ELF_ST_BIND(info) ((info) >> 4)
 #define ELF_ST_TYPE(info) ((info) & 0xF)
 
-// Relocation types (low 32 bits of r_info; high 32 bits are the symbol index).
-#define ELF_R_X86_64_64    1
-#define ELF_R_X86_64_PC32  2
-#define ELF_R_X86_64_PLT32 4
-#define ELF_R_X86_64_32    10
-#define ELF_R_X86_64_32S   11
+// Packs and unpacks the symbol index and type of r_info.
 #define ELF_R_INFO(sym, type) (((uint64_t) (sym) << 32) | (uint32_t) (type))
-#define ELF_R_SYM(info)  ((int) ((info) >> 32))
-#define ELF_R_TYPE(info) ((int) ((info) & 0xFFFFFFFF))
+#define ELF_R_SYM(info)  ((uint32_t) ((info) >> 32))
+#define ELF_R_TYPE(info) ((uint32_t) ((info) & 0xFFFFFFFF))
 
-// rel32 fixups sit 4 bytes before the next instruction, so a PC-relative
-// reference to the exact target carries an addend of -4.
-#define ELF_REL_ADDEND (-4)
-
-// Diagnoses an internal error in the writer and exits.
-#define Elf_Fail(...)                   \
-    do {                                \
-        fprintf(stderr, "cc: error: "); \
-        fprintf(stderr, __VA_ARGS__);   \
-        fprintf(stderr, "\n");          \
-        exit(1);                        \
-    } while (0)
-
-// The fixed-size ELF file header.
+// The fixed-size ELF file header, on disk.
 typedef struct {
     uint8_t  e_ident[16];
     uint16_t e_type;
@@ -89,7 +46,7 @@ typedef struct {
     uint16_t e_shentsize;
     uint16_t e_shnum;
     uint16_t e_shstrndx;
-} Elf_Ehdr;
+} Elf64_Ehdr;
 
 // One program header, describing a segment to load.
 typedef struct {
@@ -101,9 +58,9 @@ typedef struct {
     uint64_t p_filesz;
     uint64_t p_memsz;
     uint64_t p_align;
-} Elf_Phdr;
+} Elf64_Phdr;
 
-// One section header in the section header table (ET_REL output).
+// One section header in the section header table.
 typedef struct {
     uint32_t sh_name;
     uint32_t sh_type;
@@ -115,9 +72,9 @@ typedef struct {
     uint32_t sh_info;
     uint64_t sh_addralign;
     uint64_t sh_entsize;
-} Elf_Shdr;
+} Elf64_Shdr;
 
-// One entry in .symtab.
+// One entry in an on-disk .symtab.
 typedef struct {
     uint32_t st_name;
     uint8_t  st_info;
@@ -125,869 +82,602 @@ typedef struct {
     uint16_t st_shndx;
     uint64_t st_value;
     uint64_t st_size;
-} Elf_Sym;
+} Elf64_Sym;
 
-// One entry in a .rela.* section.
+// One entry in an on-disk .rela.* section.
 typedef struct {
     uint64_t r_offset;
     uint64_t r_info;
     int64_t  r_addend;
-} Elf_Rela;
+} Elf64_Rela;
 
-// A growable buffer of encoded bytes for one section.
-typedef struct {
-    unsigned char *eb_data;
-    int            eb_len;
-    int            eb_cap;
-} Elf_Buf;
+// An ELF object: header fields, the section list, the symbol table and a pool
+// that owns every section/symbol name string.
+struct Elf {
+    uint16_t    elf_type;
+    uint16_t    elf_machine;
+    uint64_t    elf_entry;
+    Elf_Sec   **elf_secs;
+    size_t      elf_nsecs;
+    size_t      elf_capsecs;
+    Elf_Sym   **elf_syms;
+    size_t      elf_nsyms;
+    size_t      elf_capsyms;
+    char      **elf_pool;
+    size_t      elf_npool;
+    size_t      elf_cappool;
+    const char *elf_err;
+};
 
-// A named position recorded inside a section.
-typedef struct {
-    const char *es_name;
-    Elf_Section es_section;
-    int         es_offset;
-} Elf_Symbol;
+// --- Elf_Buf: growable byte buffers --------------------------------------
 
-// A rel32 placeholder to be patched with the distance to a target symbol.
-typedef struct {
-    Elf_Section er_section;
-    int         er_offset;
-    const char *er_target;
-    Elf_RelType er_type;
-} Elf_Rel;
-
-// Encoded bytes of the .text and .rodata sections.
-static Elf_Buf Elf_Text;
-static Elf_Buf Elf_Rodata;
-
-// Section that writes currently append to.
-static Elf_Section Elf_Current;
-
-// Symbols defined while encoding.
-static Elf_Symbol Elf_Symbols[ELF_MAX_SYMBOLS];
-static int        Elf_NumSymbols;
-
-// Pending rel32 fixups.
-static Elf_Rel Elf_Rels[ELF_MAX_RELS];
-static int     Elf_NumRels;
-
-// Names declared global via .globl; matched against defined symbols at finish.
-static const char *Elf_Globals[ELF_MAX_GLOBALS];
-static int         Elf_NumGlobals;
-
-// Returns the buffer backing the given section.
-static Elf_Buf *Elf_SectionBuf(Elf_Section sec)
+// Initializes an empty byte buffer.
+void Elf_BufInit(Elf_Buf *buf)
 {
-    return sec == ELF_SECTION_TEXT ? &Elf_Text : &Elf_Rodata;
+    buf->eb_data = NULL;
+    buf->eb_len  = 0;
+    buf->eb_cap  = 0;
 }
 
-// Appends one byte to a buffer, growing it as needed.
-static void Elf_BufByte(Elf_Buf *buf, int byte)
+// Frees a buffer's storage and clears it.
+void Elf_BufFree(Elf_Buf *buf)
 {
-    if (buf->eb_len == buf->eb_cap) {
-        buf->eb_cap = buf->eb_cap ? buf->eb_cap * 2 : 256;
-        buf->eb_data = realloc(buf->eb_data, buf->eb_cap);
+    free(buf->eb_data);
+    buf->eb_data = NULL;
+    buf->eb_len  = 0;
+    buf->eb_cap  = 0;
+}
+
+// Grows a buffer so it can hold at least n more bytes.
+static void Elf_BufReserve(Elf_Buf *buf, size_t n)
+{
+    if (buf->eb_len + n <= buf->eb_cap) {
+        return;
     }
-    buf->eb_data[buf->eb_len++] = (unsigned char) byte;
-}
-
-// Clears the image before encoding a fresh program.
-void Elf_Reset(void)
-{
-    free(Elf_Text.eb_data);
-    free(Elf_Rodata.eb_data);
-    Elf_Text    = (Elf_Buf) {0};
-    Elf_Rodata  = (Elf_Buf) {0};
-    Elf_Current = ELF_SECTION_TEXT;
-    Elf_NumSymbols = 0;
-    Elf_NumRels    = 0;
-    Elf_NumGlobals = 0;
-}
-
-// Selects the section that following writes append to.
-void Elf_ChangeSection(Elf_Section sec)
-{
-    Elf_Current = sec;
-}
-
-// Appends one byte to the current section.
-void Elf_WriteByte(int byte)
-{
-    Elf_BufByte(Elf_SectionBuf(Elf_Current), byte);
-}
-
-// Appends a little-endian 32-bit value to the current section.
-void Elf_Write32(unsigned int val)
-{
-    for (int i = 0; i < 4; i++) {
-        Elf_WriteByte((val >> (8 * i)) & 0xFF);
+    size_t cap = buf->eb_cap ? buf->eb_cap : 256;
+    while (buf->eb_len + n > cap) {
+        cap *= 2;
     }
+    buf->eb_data = realloc(buf->eb_data, cap);
+    buf->eb_cap  = cap;
 }
 
-// Appends a little-endian 64-bit value to the current section.
-void Elf_Write64(unsigned long long val)
+// Returns a pointer to byte off within a buffer, for in-place patching.
+void *Elf_BufAt(Elf_Buf *buf, size_t off)
 {
-    for (int i = 0; i < 8; i++) {
-        Elf_WriteByte((val >> (8 * i)) & 0xFF);
-    }
+    return buf->eb_data + off;
 }
 
-// Appends a run of raw bytes to the current section.
-void Elf_WriteBytes(const void *data, int len)
+// Appends one byte, returning the offset it began at.
+size_t Elf_BufByte(Elf_Buf *buf, uint8_t value)
 {
-    const unsigned char *bytes = data;
-    for (int i = 0; i < len; i++) {
-        Elf_WriteByte(bytes[i]);
-    }
-}
-
-// Records a symbol at the current position in the current section.
-void Elf_AddSymbol(const char *name)
-{
-    if (Elf_NumSymbols >= ELF_MAX_SYMBOLS) {
-        Elf_Fail("too many symbols (max %d)", ELF_MAX_SYMBOLS);
-    }
-    Elf_Symbols[Elf_NumSymbols++] = (Elf_Symbol) {
-        .es_name    = name,
-        .es_section = Elf_Current,
-        .es_offset  = Elf_SectionBuf(Elf_Current)->eb_len
-    };
-}
-
-// Marks a defined symbol as STB_GLOBAL (from a .globl directive).
-void Elf_MarkGlobal(const char *name)
-{
-    if (Elf_NumGlobals >= ELF_MAX_GLOBALS) {
-        Elf_Fail("too many globals (max %d)", ELF_MAX_GLOBALS);
-    }
-    Elf_Globals[Elf_NumGlobals++] = name;
-}
-
-// Reserves a rel32 at the current position, resolved to target by
-// Elf_FinishExec or emitted as a type relocation by Elf_FinishRel.
-void Elf_AddRel32(const char *target, Elf_RelType type)
-{
-    if (Elf_NumRels >= ELF_MAX_RELS) {
-        Elf_Fail("too many relocations (max %d)", ELF_MAX_RELS);
-    }
-    Elf_Rels[Elf_NumRels++] = (Elf_Rel) {
-        .er_section = Elf_Current,
-        .er_offset  = Elf_SectionBuf(Elf_Current)->eb_len,
-        .er_target  = target,
-        .er_type    = type
-    };
-}
-
-// File offset at which the .text bytes begin.
-static int Elf_TextOffset(void)
-{
-    return sizeof(Elf_Ehdr) + sizeof(Elf_Phdr);
-}
-
-// File offset at which the .rodata bytes begin.
-static int Elf_RodataOffset(void)
-{
-    return Elf_TextOffset() + Elf_Text.eb_len;
-}
-
-// Virtual address of a position within a section.
-static uint64_t Elf_Vaddr(Elf_Section sec, int offset)
-{
-    int base = sec == ELF_SECTION_TEXT ? Elf_TextOffset() : Elf_RodataOffset();
-    return ELF_BASE + base + offset;
-}
-
-// Virtual address of a named symbol.
-static uint64_t Elf_SymbolVaddr(const char *name)
-{
-    for (int i = 0; i < Elf_NumSymbols; i++) {
-        if (strcmp(Elf_Symbols[i].es_name, name) == 0) {
-            return Elf_Vaddr(Elf_Symbols[i].es_section, Elf_Symbols[i].es_offset);
-        }
-    }
-    Elf_Fail("undefined symbol '%s'", name);
-}
-
-// Patches every rel32 with the signed distance from its site to its target.
-static void Elf_ResolveRels(void)
-{
-    for (int i = 0; i < Elf_NumRels; i++) {
-        Elf_Rel *rel = &Elf_Rels[i];
-        uint64_t site   = Elf_Vaddr(rel->er_section, rel->er_offset);
-        uint64_t target = Elf_SymbolVaddr(rel->er_target);
-        int32_t  delta  = (int32_t) (target - (site + 4));
-
-        unsigned char *at = Elf_SectionBuf(rel->er_section)->eb_data + rel->er_offset;
-        for (int b = 0; b < 4; b++) {
-            at[b] = (delta >> (8 * b)) & 0xFF;
-        }
-    }
-}
-
-// Resolves fixups and writes the finished ELF executable, entered at entry.
-void Elf_FinishExec(FILE *out, const char *entry)
-{
-    Elf_ResolveRels();
-
-    uint64_t filesz = Elf_RodataOffset() + Elf_Rodata.eb_len;
-
-    Elf_Ehdr ehdr = {
-        .e_ident    = { 0x7F, 'E', 'L', 'F', ELF_CLASS64, ELF_DATA2LSB, ELF_VERSION },
-        .e_type     = ELF_TYPE_EXEC,
-        .e_machine  = ELF_MACHINE_X86_64,
-        .e_version  = ELF_VERSION,
-        .e_entry    = Elf_SymbolVaddr(entry),
-        .e_phoff    = sizeof(Elf_Ehdr),
-        .e_ehsize   = sizeof(Elf_Ehdr),
-        .e_phentsize = sizeof(Elf_Phdr),
-        .e_phnum    = 1
-    };
-
-    Elf_Phdr phdr = {
-        .p_type   = ELF_PT_LOAD,
-        .p_flags  = ELF_PF_R | ELF_PF_X,
-        .p_offset = 0,
-        .p_vaddr  = ELF_BASE,
-        .p_paddr  = ELF_BASE,
-        .p_filesz = filesz,
-        .p_memsz  = filesz,
-        .p_align  = ELF_PAGE
-    };
-
-    fwrite(&ehdr, sizeof(ehdr), 1, out);
-    fwrite(&phdr, sizeof(phdr), 1, out);
-    fwrite(Elf_Text.eb_data, 1, Elf_Text.eb_len, out);
-    fwrite(Elf_Rodata.eb_data, 1, Elf_Rodata.eb_len, out);
-}
-
-// --- ET_REL writer ------------------------------------------------------
-
-// Section indices in the object's section header table.  The .text and
-// .rodata bytes always get a header; symbol references resolve to these.
-#define ELF_SHNDX_TEXT   1
-#define ELF_SHNDX_RODATA 2
-
-// One row destined for .symtab, before it is split into local/global order.
-typedef struct {
-    const char *fs_name;
-    int         fs_defined;   // 1 if defined in this object
-    Elf_Section fs_section;   // where defined
-    int         fs_value;     // offset within its section
-    int         fs_bind;      // ELF_STB_*
-    int         fs_type;      // ELF_STT_*
-    int         fs_index;     // assigned .symtab index
-} Elf_FinalSym;
-
-// Appends name and a NUL to a string table, returning name's start offset.
-static uint32_t Elf_BufStr(Elf_Buf *buf, const char *name)
-{
-    uint32_t off = buf->eb_len;
-    for (const char *p = name; *p; p++) {
-        Elf_BufByte(buf, (unsigned char) *p);
-    }
-    Elf_BufByte(buf, 0);
+    size_t off = buf->eb_len;
+    Elf_BufReserve(buf, 1);
+    buf->eb_data[buf->eb_len++] = value;
     return off;
 }
 
-// True if name was declared via .globl.
-static int Elf_IsGlobal(const char *name)
+// Appends n raw bytes, returning the offset they began at.
+size_t Elf_BufData(Elf_Buf *buf, const void *data, size_t n)
 {
-    for (int i = 0; i < Elf_NumGlobals; i++) {
-        if (strcmp(Elf_Globals[i], name) == 0) {
-            return 1;
+    size_t off = buf->eb_len;
+    Elf_BufReserve(buf, n);
+    memcpy(buf->eb_data + buf->eb_len, data, n);
+    buf->eb_len += n;
+    return off;
+}
+
+// Appends a little-endian 16-bit value, returning its offset.
+size_t Elf_BufU16(Elf_Buf *buf, uint16_t value)
+{
+    uint8_t bytes[2] = { value & 0xFF, (value >> 8) & 0xFF };
+    return Elf_BufData(buf, bytes, 2);
+}
+
+// Appends a little-endian 32-bit value, returning its offset.
+size_t Elf_BufU32(Elf_Buf *buf, uint32_t value)
+{
+    uint8_t bytes[4];
+    for (int i = 0; i < 4; i++) {
+        bytes[i] = (value >> (8 * i)) & 0xFF;
+    }
+    return Elf_BufData(buf, bytes, 4);
+}
+
+// Appends a little-endian 64-bit value, returning its offset.
+size_t Elf_BufU64(Elf_Buf *buf, uint64_t value)
+{
+    uint8_t bytes[8];
+    for (int i = 0; i < 8; i++) {
+        bytes[i] = (value >> (8 * i)) & 0xFF;
+    }
+    return Elf_BufData(buf, bytes, 8);
+}
+
+// Appends n zero bytes, returning the offset they began at.
+size_t Elf_BufZero(Elf_Buf *buf, size_t n)
+{
+    size_t off = buf->eb_len;
+    Elf_BufReserve(buf, n);
+    memset(buf->eb_data + buf->eb_len, 0, n);
+    buf->eb_len += n;
+    return off;
+}
+
+// Pads the buffer with zeros up to a multiple of align, returning new length.
+size_t Elf_BufAlign(Elf_Buf *buf, size_t align)
+{
+    if (align > 1) {
+        while (buf->eb_len % align != 0) {
+            Elf_BufByte(buf, 0);
+        }
+    }
+    return buf->eb_len;
+}
+
+// --- Elf object lifecycle ------------------------------------------------
+
+// Interns a name into the object's string pool, returning an owned copy.
+static const char *Elf_Intern(Elf *elf, const char *name)
+{
+    if (! name) {
+        name = "";
+    }
+    char *copy = malloc(strlen(name) + 1);
+    strcpy(copy, name);
+    if (elf->elf_npool == elf->elf_cappool) {
+        elf->elf_cappool = elf->elf_cappool ? elf->elf_cappool * 2 : 16;
+        elf->elf_pool = realloc(elf->elf_pool, elf->elf_cappool * sizeof *elf->elf_pool);
+    }
+    elf->elf_pool[elf->elf_npool++] = copy;
+    return copy;
+}
+
+// Creates an empty ELF object of the given type and machine.
+Elf *Elf_New(uint16_t type, uint16_t machine)
+{
+    Elf *elf = calloc(1, sizeof *elf);
+    elf->elf_type    = type;
+    elf->elf_machine = machine;
+    return elf;
+}
+
+// Frees an ELF object and everything it owns.
+void Elf_Free(Elf *elf)
+{
+    if (! elf) {
+        return;
+    }
+    for (size_t i = 0; i < elf->elf_nsecs; i++) {
+        Elf_BufFree(&elf->elf_secs[i]->sec_data);
+        free(elf->elf_secs[i]->sec_relas);
+        free(elf->elf_secs[i]);
+    }
+    free(elf->elf_secs);
+    for (size_t i = 0; i < elf->elf_nsyms; i++) {
+        free(elf->elf_syms[i]);
+    }
+    free(elf->elf_syms);
+    for (size_t i = 0; i < elf->elf_npool; i++) {
+        free(elf->elf_pool[i]);
+    }
+    free(elf->elf_pool);
+    free(elf);
+}
+
+// Sets the entry virtual address (ET_EXEC).
+void Elf_SetEntry(Elf *elf, uint64_t vaddr)
+{
+    elf->elf_entry = vaddr;
+}
+
+// Sets the object type (ELF_ET_*).
+void Elf_SetType(Elf *elf, uint16_t type)
+{
+    elf->elf_type = type;
+}
+
+// Returns the object type (ELF_ET_*).
+uint16_t Elf_GetType(const Elf *elf)
+{
+    return elf->elf_type;
+}
+
+// Returns the last error message recorded on the object, or NULL.
+const char *Elf_Error(const Elf *elf)
+{
+    return elf->elf_err;
+}
+
+// --- Elf_Section: the section list ---------------------------------------
+
+// Appends a new section and returns it.
+Elf_Sec *Elf_SectionAdd(Elf *elf, const char *name, uint32_t type, uint64_t flags)
+{
+    Elf_Sec *sec = calloc(1, sizeof *sec);
+    sec->sec_name      = Elf_Intern(elf, name);
+    sec->sec_type      = type;
+    sec->sec_flags     = flags;
+    sec->sec_addralign = 1;
+    Elf_BufInit(&sec->sec_data);
+
+    if (elf->elf_nsecs == elf->elf_capsecs) {
+        elf->elf_capsecs = elf->elf_capsecs ? elf->elf_capsecs * 2 : 8;
+        elf->elf_secs = realloc(elf->elf_secs, elf->elf_capsecs * sizeof *elf->elf_secs);
+    }
+    elf->elf_secs[elf->elf_nsecs++] = sec;
+    return sec;
+}
+
+// Finds a section by name, or returns NULL.
+Elf_Sec *Elf_SectionFind(Elf *elf, const char *name)
+{
+    for (size_t i = 0; i < elf->elf_nsecs; i++) {
+        if (strcmp(elf->elf_secs[i]->sec_name, name) == 0) {
+            return elf->elf_secs[i];
+        }
+    }
+    return NULL;
+}
+
+// Finds a section by name, creating it with the given type and flags if absent.
+Elf_Sec *Elf_SectionGet(Elf *elf, const char *name, uint32_t type, uint64_t flags)
+{
+    Elf_Sec *sec = Elf_SectionFind(elf, name);
+    if (sec) {
+        return sec;
+    }
+    return Elf_SectionAdd(elf, name, type, flags);
+}
+
+// Returns the number of sections.
+size_t Elf_SectionCount(const Elf *elf)
+{
+    return elf->elf_nsecs;
+}
+
+// Returns section i.
+Elf_Sec *Elf_SectionAt(const Elf *elf, size_t i)
+{
+    return elf->elf_secs[i];
+}
+
+// Returns the byte buffer a section's contents are appended to.
+Elf_Buf *Elf_SectionData(Elf_Sec *sec)
+{
+    return &sec->sec_data;
+}
+
+// Places a section at a load address.
+void Elf_SectionAddr(Elf_Sec *sec, uint64_t addr)
+{
+    sec->sec_addr = addr;
+}
+
+// --- Elf_Symbol: the symbol table ----------------------------------------
+
+// Appends a symbol and returns it.  sec == NULL records an undefined reference.
+Elf_Sym *Elf_SymbolAdd(Elf *elf, const char *name, Elf_Sec *sec,
+                       uint64_t value, uint8_t bind, uint8_t type)
+{
+    Elf_Sym *sym = calloc(1, sizeof *sym);
+    sym->sym_name  = Elf_Intern(elf, name);
+    sym->sym_sec   = sec;
+    sym->sym_value = value;
+    sym->sym_bind  = bind;
+    sym->sym_type  = type;
+
+    if (elf->elf_nsyms == elf->elf_capsyms) {
+        elf->elf_capsyms = elf->elf_capsyms ? elf->elf_capsyms * 2 : 16;
+        elf->elf_syms = realloc(elf->elf_syms, elf->elf_capsyms * sizeof *elf->elf_syms);
+    }
+    elf->elf_syms[elf->elf_nsyms++] = sym;
+    return sym;
+}
+
+// Finds a symbol by name, or returns NULL.
+Elf_Sym *Elf_SymbolFind(Elf *elf, const char *name)
+{
+    for (size_t i = 0; i < elf->elf_nsyms; i++) {
+        if (strcmp(elf->elf_syms[i]->sym_name, name) == 0) {
+            return elf->elf_syms[i];
+        }
+    }
+    return NULL;
+}
+
+// Returns the number of symbols.
+size_t Elf_SymbolCount(const Elf *elf)
+{
+    return elf->elf_nsyms;
+}
+
+// Returns symbol i.
+Elf_Sym *Elf_SymbolAt(const Elf *elf, size_t i)
+{
+    return elf->elf_syms[i];
+}
+
+// --- Elf_Rela: relocations owned by the section they patch ---------------
+
+// Appends a relocation to the section it patches and returns it.
+Elf_Rela *Elf_RelaAdd(Elf_Sec *target, uint64_t offset, Elf_Sym *sym,
+                      uint32_t type, int64_t addend)
+{
+    if (target->sec_nrelas == target->sec_caprelas) {
+        target->sec_caprelas = target->sec_caprelas ? target->sec_caprelas * 2 : 8;
+        target->sec_relas = realloc(target->sec_relas,
+                                    target->sec_caprelas * sizeof *target->sec_relas);
+    }
+    Elf_Rela *rel = &target->sec_relas[target->sec_nrelas++];
+    rel->rel_offset = offset;
+    rel->rel_sym    = sym;
+    rel->rel_type   = type;
+    rel->rel_addend = addend;
+    return rel;
+}
+
+// Returns the number of relocations patching a section.
+size_t Elf_RelaCount(const Elf_Sec *target)
+{
+    return target->sec_nrelas;
+}
+
+// Returns relocation i of a section.
+Elf_Rela *Elf_RelaAt(const Elf_Sec *target, size_t i)
+{
+    return (Elf_Rela *) &target->sec_relas[i];
+}
+
+// --- Elf_Write: model -> bytes -------------------------------------------
+
+// Appends name and a NUL to a string table, returning name's start offset.
+static uint32_t Elf_WriteStr(Elf_Buf *strtab, const char *name)
+{
+    uint32_t off = (uint32_t) strtab->eb_len;
+    Elf_BufData(strtab, name, strlen(name) + 1);
+    return off;
+}
+
+// Position of a section within the object, used to fill in section indices.
+static uint32_t Elf_SectionIndex(const Elf *elf, const Elf_Sec *sec, const uint32_t *secidx)
+{
+    for (size_t i = 0; i < elf->elf_nsecs; i++) {
+        if (elf->elf_secs[i] == sec) {
+            return secidx[i];
         }
     }
     return 0;
 }
 
-// Index of name within the final-symbol list, or -1 if absent.
-static int Elf_FindFinal(const Elf_FinalSym *fs, int n, const char *name)
+// Builds the .symtab and .strtab bodies, ordering symbols locals-before-globals,
+// recording each symbol's final index in slot[] and the first global index.
+static void Elf_WriteSymtab(const Elf *elf, const uint32_t *secidx, Elf_Buf *symtab,
+                            Elf_Buf *strtab, uint32_t *slot, uint32_t *first_global)
 {
-    for (int i = 0; i < n; i++) {
-        if (strcmp(fs[i].fs_name, name) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
+    Elf64_Sym null = {0};
+    Elf_BufData(symtab, &null, sizeof null);
+    Elf_BufByte(strtab, 0);
 
-// Builds the .symtab rows: every defined symbol, plus an SHN_UNDEF entry for
-// each relocation target with no local definition (e.g. a call to printf).
-static int Elf_BuildFinalSyms(Elf_FinalSym *fs)
-{
-    int n = 0;
-
-    for (int i = 0; i < Elf_NumSymbols; i++) {
-        const Elf_Symbol *sym = &Elf_Symbols[i];
-        int global = Elf_IsGlobal(sym->es_name);
-        int type   = ELF_STT_NOTYPE;
-        if (global) {
-            type = sym->es_section == ELF_SECTION_TEXT ? ELF_STT_FUNC
-                                                       : ELF_STT_OBJECT;
-        }
-        fs[n++] = (Elf_FinalSym) {
-            .fs_name    = sym->es_name,
-            .fs_defined = 1,
-            .fs_section = sym->es_section,
-            .fs_value   = sym->es_offset,
-            .fs_bind    = global ? ELF_STB_GLOBAL : ELF_STB_LOCAL,
-            .fs_type    = type
-        };
-    }
-
-    for (int i = 0; i < Elf_NumRels; i++) {
-        const char *name = Elf_Rels[i].er_target;
-        if (Elf_FindFinal(fs, n, name) < 0) {
-            fs[n++] = (Elf_FinalSym) {
-                .fs_name = name,
-                .fs_bind = ELF_STB_GLOBAL,
-                .fs_type = ELF_STT_NOTYPE
-            };
-        }
-    }
-    return n;
-}
-
-// Orders fs[] with all locals before all globals (ELF requires it), assigns
-// each row its final .symtab index, and builds the symbol table (*syms_out,
-// *nsym_out), its string table (*strtab_out) and the first-global index.
-// Index 0 is the reserved null entry.
-static void Elf_EmitSymtab(Elf_FinalSym *fs, int nfs, Elf_Sym **syms_out,
-                           int *nsym_out, Elf_Buf *strtab_out, int *first_global_out)
-{
-    int      nsym = nfs + 1;
-    Elf_Sym *syms = calloc(nsym, sizeof *syms);
-    Elf_Buf  strtab = {0};
-    Elf_BufByte(&strtab, 0);
-
-    int si = 1;
+    uint32_t si = 1;
     for (int pass = 0; pass < 2; pass++) {
-        int want = pass == 0 ? ELF_STB_LOCAL : ELF_STB_GLOBAL;
-        for (int i = 0; i < nfs; i++) {
-            if (fs[i].fs_bind != want) {
+        uint8_t want = pass == 0 ? ELF_BIND_LOCAL : ELF_BIND_GLOBAL;
+        if (pass == 1) {
+            *first_global = si;
+        }
+        for (size_t i = 0; i < elf->elf_nsyms; i++) {
+            Elf_Sym *sym  = elf->elf_syms[i];
+            uint8_t  bind = sym->sym_bind == ELF_BIND_LOCAL ? ELF_BIND_LOCAL
+                                                            : ELF_BIND_GLOBAL;
+            if (bind != want) {
                 continue;
             }
-            fs[i].fs_index = si;
-            syms[si].st_name  = Elf_BufStr(&strtab, fs[i].fs_name);
-            syms[si].st_info  = ELF_ST_INFO(fs[i].fs_bind, fs[i].fs_type);
-            if (fs[i].fs_defined) {
-                syms[si].st_shndx = fs[i].fs_section == ELF_SECTION_TEXT
-                                        ? ELF_SHNDX_TEXT : ELF_SHNDX_RODATA;
-                syms[si].st_value = fs[i].fs_value;
+            slot[i] = si++;
+            Elf64_Sym out = {
+                .st_name  = Elf_WriteStr(strtab, sym->sym_name),
+                .st_info  = ELF_ST_INFO(sym->sym_bind, sym->sym_type),
+                .st_other = sym->sym_other,
+                .st_size  = sym->sym_size
+            };
+            if (sym->sym_sec) {
+                out.st_shndx = Elf_SectionIndex(elf, sym->sym_sec, secidx);
+                out.st_value = sym->sym_value;
             } else {
-                syms[si].st_shndx = ELF_SHN_UNDEF;
+                out.st_shndx = ELF_SHN_UNDEF;
             }
-            si++;
+            Elf_BufData(symtab, &out, sizeof out);
         }
     }
-    int first_global = si;
-    for (int i = 0; i < nfs; i++) {
-        if (fs[i].fs_bind == ELF_STB_GLOBAL) {
-            first_global = fs[i].fs_index;
-            break;
-        }
-    }
-
-    *syms_out         = syms;
-    *nsym_out         = nsym;
-    *strtab_out       = strtab;
-    *first_global_out = first_global;
 }
 
-// Writes a complete ET_REL file from already-built section contents: the
-// .text/.rodata bytes, a symbol table (with its string table and first-global
-// index) and the split .rela.text/.rela.rodata tables.  Empty .rela.* sections
-// are omitted; .text and .rodata keep fixed indices 1 and 2.
-static void Elf_WriteRelFile(FILE *out, const Elf_Buf *text, const Elf_Buf *rodata,
-                             const Elf_Sym *syms, int nsym, int first_global,
-                             const Elf_Buf *strtab, const Elf_Rela *relatext, int ntr,
-                             const Elf_Rela *relarodata, int nrr)
+// Builds one .rela.* body from a section's relocations, using final indices.
+static void Elf_WriteRelas(const Elf_Sec *sec, const uint32_t *slot,
+                           const Elf *elf, Elf_Buf *out)
 {
-    Elf_Shdr shdrs[8] = {0};
-    const void *secdata[8] = {0};
-    Elf_Buf shstr = {0};
+    for (size_t r = 0; r < sec->sec_nrelas; r++) {
+        Elf_Rela *rel = &sec->sec_relas[r];
+        uint32_t  symi = 0;
+        for (size_t i = 0; i < elf->elf_nsyms; i++) {
+            if (elf->elf_syms[i] == rel->rel_sym) {
+                symi = slot[i];
+                break;
+            }
+        }
+        Elf64_Rela disk = {
+            .r_offset = rel->rel_offset,
+            .r_info   = ELF_R_INFO(symi, rel->rel_type),
+            .r_addend = rel->rel_addend
+        };
+        Elf_BufData(out, &disk, sizeof disk);
+    }
+}
+
+// Serializes a relocatable object (ET_REL): the model's sections plus a
+// synthesized .symtab/.strtab, a .rela.<name> for each relocated section and
+// .shstrtab.  Indices, string offsets, sh_link and sh_info are all built here.
+static int Elf_WriteRel(const Elf *elf, FILE *out)
+{
+    size_t nuser = elf->elf_nsecs;
+
+    // Phase: assign a section-header index to every output section.
+    uint32_t *secidx = calloc(nuser ? nuser : 1, sizeof *secidx);
+    uint32_t idx = 1;
+    for (size_t i = 0; i < nuser; i++) {
+        secidx[i] = idx++;
+    }
+    uint32_t idx_symtab = idx++;
+    uint32_t idx_strtab = idx++;
+    uint32_t *relaidx = calloc(nuser ? nuser : 1, sizeof *relaidx);
+    for (size_t i = 0; i < nuser; i++) {
+        if (elf->elf_secs[i]->sec_nrelas) {
+            relaidx[i] = idx++;
+        }
+    }
+    uint32_t idx_shstrtab = idx++;
+    uint32_t shnum = idx;
+
+    // Phase: build the symbol table and per-section relocation bodies.
+    uint32_t *slot = calloc(elf->elf_nsyms ? elf->elf_nsyms : 1, sizeof *slot);
+    uint32_t  first_global = 1;
+    Elf_Buf   symtab, strtab, shstr;
+    Elf_BufInit(&symtab);
+    Elf_BufInit(&strtab);
+    Elf_BufInit(&shstr);
     Elf_BufByte(&shstr, 0);
+    Elf_WriteSymtab(elf, secidx, &symtab, &strtab, slot, &first_global);
 
-    int idx_relatext   = ntr ? 5 : 0;
-    int idx_relarodata = nrr ? (idx_relatext ? idx_relatext + 1 : 5) : 0;
-    int idx_shstrtab   = 5 + (ntr ? 1 : 0) + (nrr ? 1 : 0);
-    int shnum          = idx_shstrtab + 1;
+    Elf_Buf *relas = calloc(nuser ? nuser : 1, sizeof *relas);
+    for (size_t i = 0; i < nuser; i++) {
+        Elf_BufInit(&relas[i]);
+        if (relaidx[i]) {
+            Elf_WriteRelas(elf->elf_secs[i], slot, elf, &relas[i]);
+        }
+    }
 
-    shdrs[ELF_SHNDX_TEXT] = (Elf_Shdr) {
-        .sh_name = Elf_BufStr(&shstr, ".text"),
-        .sh_type = ELF_SHT_PROGBITS,
-        .sh_flags = ELF_SHF_ALLOC | ELF_SHF_EXECINSTR,
-        .sh_size = text->eb_len,
-        .sh_addralign = 1
-    };
-    secdata[ELF_SHNDX_TEXT] = text->eb_data;
+    // Phase: lay out section headers and their bodies.
+    Elf64_Shdr *shdrs   = calloc(shnum, sizeof *shdrs);
+    const void **bodies = calloc(shnum, sizeof *bodies);
+    uint64_t    *sizes  = calloc(shnum, sizeof *sizes);
 
-    shdrs[ELF_SHNDX_RODATA] = (Elf_Shdr) {
-        .sh_name = Elf_BufStr(&shstr, ".rodata"),
-        .sh_type = ELF_SHT_PROGBITS,
-        .sh_flags = ELF_SHF_ALLOC,
-        .sh_size = rodata->eb_len,
-        .sh_addralign = 1
-    };
-    secdata[ELF_SHNDX_RODATA] = rodata->eb_data;
+    for (size_t i = 0; i < nuser; i++) {
+        Elf_Sec *sec = elf->elf_secs[i];
+        shdrs[secidx[i]] = (Elf64_Shdr) {
+            .sh_name      = Elf_WriteStr(&shstr, sec->sec_name),
+            .sh_type      = sec->sec_type,
+            .sh_flags     = sec->sec_flags,
+            .sh_size      = sec->sec_data.eb_len,
+            .sh_addralign = sec->sec_addralign,
+            .sh_entsize   = sec->sec_entsize
+        };
+        bodies[secidx[i]] = sec->sec_data.eb_data;
+        sizes[secidx[i]]  = sec->sec_data.eb_len;
+    }
 
-    int idx_symtab = 3, idx_strtab = 4;
-    shdrs[idx_symtab] = (Elf_Shdr) {
-        .sh_name = Elf_BufStr(&shstr, ".symtab"),
-        .sh_type = ELF_SHT_SYMTAB,
-        .sh_size = (uint64_t) nsym * sizeof(Elf_Sym),
-        .sh_link = idx_strtab,
-        .sh_info = first_global,
+    shdrs[idx_symtab] = (Elf64_Shdr) {
+        .sh_name      = Elf_WriteStr(&shstr, ".symtab"),
+        .sh_type      = ELF_SHT_SYMTAB,
+        .sh_size      = symtab.eb_len,
+        .sh_link      = idx_strtab,
+        .sh_info      = first_global,
         .sh_addralign = 8,
-        .sh_entsize = sizeof(Elf_Sym)
+        .sh_entsize   = sizeof(Elf64_Sym)
     };
-    secdata[idx_symtab] = syms;
+    bodies[idx_symtab] = symtab.eb_data;
+    sizes[idx_symtab]  = symtab.eb_len;
 
-    shdrs[idx_strtab] = (Elf_Shdr) {
-        .sh_name = Elf_BufStr(&shstr, ".strtab"),
-        .sh_type = ELF_SHT_STRTAB,
-        .sh_size = strtab->eb_len,
+    shdrs[idx_strtab] = (Elf64_Shdr) {
+        .sh_name      = Elf_WriteStr(&shstr, ".strtab"),
+        .sh_type      = ELF_SHT_STRTAB,
+        .sh_size      = strtab.eb_len,
         .sh_addralign = 1
     };
-    secdata[idx_strtab] = strtab->eb_data;
+    bodies[idx_strtab] = strtab.eb_data;
+    sizes[idx_strtab]  = strtab.eb_len;
 
-    if (idx_relatext) {
-        shdrs[idx_relatext] = (Elf_Shdr) {
-            .sh_name = Elf_BufStr(&shstr, ".rela.text"),
-            .sh_type = ELF_SHT_RELA,
-            .sh_flags = ELF_SHF_INFO_LINK,
-            .sh_size = (uint64_t) ntr * sizeof(Elf_Rela),
-            .sh_link = idx_symtab,
-            .sh_info = ELF_SHNDX_TEXT,
+    for (size_t i = 0; i < nuser; i++) {
+        if (! relaidx[i]) {
+            continue;
+        }
+        char name[64];
+        snprintf(name, sizeof name, ".rela%s", elf->elf_secs[i]->sec_name);
+        shdrs[relaidx[i]] = (Elf64_Shdr) {
+            .sh_name      = Elf_WriteStr(&shstr, name),
+            .sh_type      = ELF_SHT_RELA,
+            .sh_size      = relas[i].eb_len,
+            .sh_link      = idx_symtab,
+            .sh_info      = secidx[i],
             .sh_addralign = 8,
-            .sh_entsize = sizeof(Elf_Rela)
+            .sh_entsize   = sizeof(Elf64_Rela)
         };
-        secdata[idx_relatext] = relatext;
-    }
-    if (idx_relarodata) {
-        shdrs[idx_relarodata] = (Elf_Shdr) {
-            .sh_name = Elf_BufStr(&shstr, ".rela.rodata"),
-            .sh_type = ELF_SHT_RELA,
-            .sh_flags = ELF_SHF_INFO_LINK,
-            .sh_size = (uint64_t) nrr * sizeof(Elf_Rela),
-            .sh_link = idx_symtab,
-            .sh_info = ELF_SHNDX_RODATA,
-            .sh_addralign = 8,
-            .sh_entsize = sizeof(Elf_Rela)
-        };
-        secdata[idx_relarodata] = relarodata;
+        bodies[relaidx[i]] = relas[i].eb_data;
+        sizes[relaidx[i]]  = relas[i].eb_len;
     }
 
-    shdrs[idx_shstrtab] = (Elf_Shdr) {
-        .sh_name = Elf_BufStr(&shstr, ".shstrtab"),
-        .sh_type = ELF_SHT_STRTAB,
-        .sh_size = shstr.eb_len,
+    shdrs[idx_shstrtab] = (Elf64_Shdr) {
+        .sh_name      = Elf_WriteStr(&shstr, ".shstrtab"),
+        .sh_type      = ELF_SHT_STRTAB,
         .sh_addralign = 1
     };
-    secdata[idx_shstrtab] = shstr.eb_data;
+    bodies[idx_shstrtab] = shstr.eb_data;
+    sizes[idx_shstrtab]  = shstr.eb_len;
+    shdrs[idx_shstrtab].sh_size = shstr.eb_len;
 
-    // Assign file offsets to each section, then the header table (8-aligned).
-    uint64_t off = sizeof(Elf_Ehdr);
-    for (int i = 1; i < shnum; i++) {
+    // Phase: assign file offsets, then write header, bodies and shdr table.
+    uint64_t off = sizeof(Elf64_Ehdr);
+    for (uint32_t i = 1; i < shnum; i++) {
         uint64_t align = shdrs[i].sh_addralign ? shdrs[i].sh_addralign : 1;
         off = (off + align - 1) / align * align;
         shdrs[i].sh_offset = off;
-        off += shdrs[i].sh_size;
+        off += sizes[i];
     }
     off = (off + 7) / 8 * 8;
     uint64_t shoff = off;
 
-    Elf_Ehdr ehdr = {
+    Elf64_Ehdr ehdr = {
         .e_ident     = { 0x7F, 'E', 'L', 'F', ELF_CLASS64, ELF_DATA2LSB, ELF_VERSION },
-        .e_type      = ELF_TYPE_REL,
-        .e_machine   = ELF_MACHINE_X86_64,
+        .e_type      = ELF_ET_REL,
+        .e_machine   = elf->elf_machine,
         .e_version   = ELF_VERSION,
         .e_shoff     = shoff,
-        .e_ehsize    = sizeof(Elf_Ehdr),
-        .e_shentsize = sizeof(Elf_Shdr),
-        .e_shnum     = shnum,
-        .e_shstrndx  = idx_shstrtab
+        .e_ehsize    = sizeof(Elf64_Ehdr),
+        .e_shentsize = sizeof(Elf64_Shdr),
+        .e_shnum     = (uint16_t) shnum,
+        .e_shstrndx  = (uint16_t) idx_shstrtab
     };
 
-    // Emit: header, section bytes (padded to their offsets), header table.
     long pos = 0;
-    fwrite(&ehdr, sizeof(ehdr), 1, out);
-    pos += sizeof(ehdr);
-    for (int i = 1; i < shnum; i++) {
+    fwrite(&ehdr, sizeof ehdr, 1, out);
+    pos += sizeof ehdr;
+    for (uint32_t i = 1; i < shnum; i++) {
         while (pos < (long) shdrs[i].sh_offset) {
             fputc(0, out);
             pos++;
         }
-        fwrite(secdata[i], 1, shdrs[i].sh_size, out);
-        pos += shdrs[i].sh_size;
+        if (sizes[i]) {
+            fwrite(bodies[i], 1, sizes[i], out);
+        }
+        pos += sizes[i];
     }
     while (pos < (long) shoff) {
         fputc(0, out);
         pos++;
     }
-    fwrite(shdrs, sizeof(Elf_Shdr), shnum, out);
+    fwrite(shdrs, sizeof(Elf64_Shdr), shnum, out);
 
-    free(shstr.eb_data);
-}
-
-// Writes a relocatable ELF object (ET_REL) from the encoder's current state.
-void Elf_FinishRel(FILE *out)
-{
-    // Gather symbols (defined + undefined references) and emit the symbol table.
-    Elf_FinalSym *fs = calloc(Elf_NumSymbols + Elf_NumRels + 1, sizeof *fs);
-    int nfs = Elf_BuildFinalSyms(fs);
-
-    Elf_Sym *syms;
-    int      nsym, first_global;
-    Elf_Buf  strtab;
-    Elf_EmitSymtab(fs, nfs, &syms, &nsym, &strtab, &first_global);
-
-    // Split relocations into per-section .rela.* tables, by target name.
-    Elf_Rela *relatext   = calloc(Elf_NumRels + 1, sizeof *relatext);
-    Elf_Rela *relarodata = calloc(Elf_NumRels + 1, sizeof *relarodata);
-    int ntr = 0, nrr = 0;
-    for (int i = 0; i < Elf_NumRels; i++) {
-        Elf_Rel *rel = &Elf_Rels[i];
-        int fi  = Elf_FindFinal(fs, nfs, rel->er_target);
-        int rt  = rel->er_type == ELF_REL_PLT32 ? ELF_R_X86_64_PLT32
-                                                : ELF_R_X86_64_PC32;
-        Elf_Rela e = {
-            .r_offset = rel->er_offset,
-            .r_info   = ELF_R_INFO(fs[fi].fs_index, rt),
-            .r_addend = ELF_REL_ADDEND
-        };
-        if (rel->er_section == ELF_SECTION_TEXT) {
-            relatext[ntr++] = e;
-        } else {
-            relarodata[nrr++] = e;
-        }
+    Elf_BufFree(&symtab);
+    Elf_BufFree(&strtab);
+    Elf_BufFree(&shstr);
+    for (size_t i = 0; i < nuser; i++) {
+        Elf_BufFree(&relas[i]);
     }
-
-    Elf_WriteRelFile(out, &Elf_Text, &Elf_Rodata, syms, nsym, first_global,
-                     &strtab, relatext, ntr, relarodata, nrr);
-
-    free(fs);
-    free(syms);
-    free(strtab.eb_data);
-    free(relatext);
-    free(relarodata);
-}
-
-// --- ET_REL reader / link core ------------------------------------------
-
-// One relocatable object loaded into memory for linking.  lo_outsec/lo_base
-// record where each input section landed in the merged output: which output
-// section (ELF_SECTION_* or -1 if not allocated) and at what offset within it.
-typedef struct {
-    const char    *lo_path;     // input path, for diagnostics
-    unsigned char *lo_data;     // whole file image, owned
-    Elf_Ehdr      *lo_ehdr;     // -> lo_data
-    Elf_Shdr      *lo_shdr;     // section header table (lo_ehdr->e_shnum rows)
-    Elf_Sym       *lo_syms;     // .symtab rows
-    int            lo_nsyms;
-    const char    *lo_symstr;   // string table backing .symtab
-    int           *lo_outsec;   // [e_shnum] ELF_SECTION_*, or -1
-    long          *lo_base;     // [e_shnum] offset within that output section
-} Elf_Obj;
-
-// One defined global symbol in the combined program.
-typedef struct {
-    const char *lg_name;
-    uint64_t    lg_vaddr;
-} Elf_LinkGlobal;
-
-// One loadable segment in a placed (-place) executable.
-typedef struct {
-    Elf_Buf *es_buf;
-    uint64_t es_vaddr;
-    uint64_t es_offset;
-} Elf_Seg;
-
-// Reads an entire file into a freshly allocated buffer.
-static unsigned char *Elf_ReadFile(const char *path, long *size_out)
-{
-    FILE *f = fopen(path, "rb");
-    if (! f) {
-        Elf_Fail("cannot open '%s'", path);
-    }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    unsigned char *buf = malloc(size);
-    if (fread(buf, 1, size, f) != (size_t) size) {
-        Elf_Fail("short read on '%s'", path);
-    }
-    fclose(f);
-    *size_out = size;
-    return buf;
-}
-
-// Loads and validates one ET_REL object, locating its section headers and
-// symbol table.  Section-placement fields start unassigned (-1).
-static void Elf_LoadObj(Elf_Obj *obj, const char *path)
-{
-    long size;
-    unsigned char *data = Elf_ReadFile(path, &size);
-    Elf_Ehdr *eh = (Elf_Ehdr *) data;
-
-    if (size < (long) sizeof *eh || eh->e_ident[0] != 0x7F ||
-        eh->e_ident[1] != 'E' || eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F') {
-        Elf_Fail("'%s' is not an ELF file", path);
-    }
-    if (eh->e_type != ELF_TYPE_REL) {
-        Elf_Fail("'%s' is not a relocatable object (ET_REL)", path);
-    }
-    if (eh->e_machine != ELF_MACHINE_X86_64) {
-        Elf_Fail("'%s' is not an x86-64 object", path);
-    }
-
-    Elf_Shdr *sh = (Elf_Shdr *) (data + eh->e_shoff);
-    int shnum = eh->e_shnum;
-
-    Elf_Sym    *syms   = NULL;
-    int         nsyms  = 0;
-    const char *symstr = NULL;
-    for (int i = 0; i < shnum; i++) {
-        if (sh[i].sh_type == ELF_SHT_SYMTAB) {
-            syms   = (Elf_Sym *) (data + sh[i].sh_offset);
-            nsyms  = sh[i].sh_size / sizeof(Elf_Sym);
-            symstr = (const char *) (data + sh[sh[i].sh_link].sh_offset);
-            break;
-        }
-    }
-    if (! syms) {
-        Elf_Fail("'%s' has no symbol table", path);
-    }
-
-    obj->lo_path   = path;
-    obj->lo_data   = data;
-    obj->lo_ehdr   = eh;
-    obj->lo_shdr   = sh;
-    obj->lo_syms   = syms;
-    obj->lo_nsyms  = nsyms;
-    obj->lo_symstr = symstr;
-    obj->lo_outsec = malloc(shnum * sizeof *obj->lo_outsec);
-    obj->lo_base   = calloc(shnum, sizeof *obj->lo_base);
-    for (int i = 0; i < shnum; i++) {
-        obj->lo_outsec[i] = -1;
-    }
-}
-
-// Appends len bytes to a merged section buffer, padding to align first, and
-// returns the offset the bytes start at.
-static long Elf_BufAppend(Elf_Buf *buf, const unsigned char *src, long len, long align)
-{
-    if (align < 1) {
-        align = 1;
-    }
-    while (buf->eb_len % align != 0) {
-        Elf_BufByte(buf, 0);
-    }
-    long at = buf->eb_len;
-    for (long i = 0; i < len; i++) {
-        Elf_BufByte(buf, src[i]);
-    }
-    return at;
-}
-
-// Virtual address of an output section's base, given the merged text/rodata
-// vaddrs computed once the text size is known.
-static uint64_t Elf_OutVaddr(int outsec, uint64_t text_vaddr, uint64_t rodata_vaddr)
-{
-    return outsec == ELF_SECTION_TEXT ? text_vaddr : rodata_vaddr;
-}
-
-// Resolves a symbol reference (object o, symbol index) to a virtual address.
-// A symbol defined in a merged section -- whether a file-local label or a
-// global -- is placed from that object's section base; an undefined reference
-// is matched by name against the program-wide global table.
-static uint64_t Elf_ResolveSym(Elf_Obj *o, int symidx, uint64_t text_vaddr,
-                               uint64_t rodata_vaddr, Elf_LinkGlobal *globals, int nglob)
-{
-    Elf_Sym    *sym  = &o->lo_syms[symidx];
-    const char *name = o->lo_symstr + sym->st_name;
-
-    if (sym->st_shndx != ELF_SHN_UNDEF && sym->st_shndx < o->lo_ehdr->e_shnum) {
-        int outsec = o->lo_outsec[sym->st_shndx];
-        if (outsec < 0) {
-            Elf_Fail("'%s': reference to symbol '%s' in a non-loadable section",
-                     o->lo_path, name);
-        }
-        return Elf_OutVaddr(outsec, text_vaddr, rodata_vaddr)
-             + o->lo_base[sym->st_shndx] + sym->st_value;
-    }
-
-    for (int g = 0; g < nglob; g++) {
-        if (strcmp(globals[g].lg_name, name) == 0) {
-            return globals[g].lg_vaddr;
-        }
-    }
-    Elf_Fail("undefined symbol '%s'", name);
-}
-
-// Patches one little-endian field of width bytes at at with value.
-static void Elf_PatchLE(unsigned char *at, uint64_t value, int width)
-{
-    for (int b = 0; b < width; b++) {
-        at[b] = (value >> (8 * b)) & 0xFF;
-    }
-}
-
-// Merges every object's allocatable PROGBITS section into text (executable) or
-// rodata (everything else), recording each input section's output placement.
-static void Elf_MergeSections(Elf_Obj *objs, int npaths, Elf_Buf *text, Elf_Buf *rodata)
-{
-    for (int i = 0; i < npaths; i++) {
-        Elf_Obj *o = &objs[i];
-        for (int s = 0; s < o->lo_ehdr->e_shnum; s++) {
-            Elf_Shdr *sec = &o->lo_shdr[s];
-            if (sec->sh_type != ELF_SHT_PROGBITS || ! (sec->sh_flags & ELF_SHF_ALLOC)) {
-                continue;
-            }
-            int outsec = (sec->sh_flags & ELF_SHF_EXECINSTR) ? ELF_SECTION_TEXT
-                                                             : ELF_SECTION_RODATA;
-            Elf_Buf *buf = outsec == ELF_SECTION_TEXT ? text : rodata;
-            o->lo_outsec[s] = outsec;
-            o->lo_base[s]   = Elf_BufAppend(buf, o->lo_data + sec->sh_offset,
-                                            sec->sh_size, sec->sh_addralign);
-        }
-    }
-}
-
-// Merges the symbol tables and relocations of the loaded objects into a single
-// ET_REL object: globals are unified by name (undefined references fold into a
-// matching definition), locals are kept per object, and every relocation site
-// and symbol reference is rebased into the merged sections.
-static void Elf_LinkEmitRel(Elf_Obj *objs, int npaths, const Elf_Buf *text,
-                            const Elf_Buf *rodata, FILE *out)
-{
-    int total_syms = 0, total_rels = 0;
-    for (int i = 0; i < npaths; i++) {
-        total_syms += objs[i].lo_nsyms;
-        for (int s = 0; s < objs[i].lo_ehdr->e_shnum; s++) {
-            Elf_Shdr *rs = &objs[i].lo_shdr[s];
-            if (rs->sh_type == ELF_SHT_RELA) {
-                total_rels += rs->sh_size / sizeof(Elf_Rela);
-            }
-        }
-    }
-
-    Elf_FinalSym *fs = calloc(total_syms + 1, sizeof *fs);
-    int nfs = 0;
-
-    // Per-object map from an input symbol index to its row in fs[] (-1 = drop).
-    int **symmap = calloc(npaths, sizeof *symmap);
-    for (int i = 0; i < npaths; i++) {
-        Elf_Obj *o = &objs[i];
-        symmap[i] = malloc(o->lo_nsyms * sizeof **symmap);
-        for (int k = 0; k < o->lo_nsyms; k++) {
-            symmap[i][k] = -1;
-            if (k == 0) {
-                continue;   // reserved null symbol
-            }
-            Elf_Sym    *sym  = &o->lo_syms[k];
-            int         bind = ELF_ST_BIND(sym->st_info);
-            const char *name = o->lo_symstr + sym->st_name;
-
-            int         defined = 0;
-            Elf_Section section = ELF_SECTION_TEXT;
-            int         value   = 0;
-            if (sym->st_shndx != ELF_SHN_UNDEF && sym->st_shndx < o->lo_ehdr->e_shnum
-                && o->lo_outsec[sym->st_shndx] >= 0) {
-                defined = 1;
-                section = o->lo_outsec[sym->st_shndx];
-                value   = o->lo_base[sym->st_shndx] + sym->st_value;
-            }
-
-            if (bind == ELF_STB_GLOBAL) {
-                int fi = -1;
-                for (int j = 0; j < nfs; j++) {
-                    if (fs[j].fs_bind == ELF_STB_GLOBAL && strcmp(fs[j].fs_name, name) == 0) {
-                        fi = j;
-                        break;
-                    }
-                }
-                if (fi >= 0) {
-                    if (defined) {
-                        if (fs[fi].fs_defined) {
-                            Elf_Fail("multiple definition of '%s'", name);
-                        }
-                        fs[fi].fs_defined = 1;
-                        fs[fi].fs_section = section;
-                        fs[fi].fs_value   = value;
-                        fs[fi].fs_type    = ELF_ST_TYPE(sym->st_info);
-                    }
-                    symmap[i][k] = fi;
-                    continue;
-                }
-            }
-
-            fs[nfs] = (Elf_FinalSym) {
-                .fs_name    = name,
-                .fs_defined = defined,
-                .fs_section = section,
-                .fs_value   = value,
-                .fs_bind    = bind == ELF_STB_GLOBAL ? ELF_STB_GLOBAL : ELF_STB_LOCAL,
-                .fs_type    = ELF_ST_TYPE(sym->st_info)
-            };
-            symmap[i][k] = nfs++;
-        }
-    }
-
-    Elf_Sym *syms;
-    int      nsym, first_global;
-    Elf_Buf  strtab;
-    Elf_EmitSymtab(fs, nfs, &syms, &nsym, &strtab, &first_global);
-
-    // Rebase relocations into the merged sections, retargeting symbol indices.
-    Elf_Rela *relatext   = calloc(total_rels + 1, sizeof *relatext);
-    Elf_Rela *relarodata = calloc(total_rels + 1, sizeof *relarodata);
-    int ntr = 0, nrr = 0;
-    for (int i = 0; i < npaths; i++) {
-        Elf_Obj *o = &objs[i];
-        for (int s = 0; s < o->lo_ehdr->e_shnum; s++) {
-            Elf_Shdr *rs = &o->lo_shdr[s];
-            if (rs->sh_type != ELF_SHT_RELA) {
-                continue;
-            }
-            int tsec = rs->sh_info;
-            if (tsec >= o->lo_ehdr->e_shnum || o->lo_outsec[tsec] < 0) {
-                continue;
-            }
-            Elf_Rela *rela = (Elf_Rela *) (o->lo_data + rs->sh_offset);
-            int       nrel = rs->sh_size / sizeof(Elf_Rela);
-            for (int r = 0; r < nrel; r++) {
-                int oldsym = ELF_R_SYM(rela[r].r_info);
-                int fi     = (oldsym >= 0 && oldsym < o->lo_nsyms) ? symmap[i][oldsym] : -1;
-                if (fi < 0) {
-                    Elf_Fail("'%s': relocation against an unsupported symbol", o->lo_path);
-                }
-                Elf_Rela e = {
-                    .r_offset = o->lo_base[tsec] + rela[r].r_offset,
-                    .r_info   = ELF_R_INFO(fs[fi].fs_index, ELF_R_TYPE(rela[r].r_info)),
-                    .r_addend = rela[r].r_addend
-                };
-                if (o->lo_outsec[tsec] == ELF_SECTION_TEXT) {
-                    relatext[ntr++] = e;
-                } else {
-                    relarodata[nrr++] = e;
-                }
-            }
-        }
-    }
-
-    Elf_WriteRelFile(out, text, rodata, syms, nsym, first_global, &strtab,
-                     relatext, ntr, relarodata, nrr);
-
-    for (int i = 0; i < npaths; i++) {
-        free(symmap[i]);
-    }
-    free(symmap);
-    free(fs);
-    free(syms);
-    free(strtab.eb_data);
-    free(relatext);
-    free(relarodata);
+    free(relas);
+    free(secidx);
+    free(relaidx);
+    free(slot);
+    free(shdrs);
+    free(bodies);
+    free(sizes);
+    return 0;
 }
 
 // Smallest file offset >= pos that is page-congruent with vaddr, as a PT_LOAD
@@ -997,234 +687,203 @@ static uint64_t Elf_PlaceOffset(uint64_t pos, uint64_t vaddr)
     return pos + (vaddr - pos) % ELF_PAGE;
 }
 
-// Resolves the entry symbol against the global table, or aborts if undefined.
-static uint64_t Elf_EntryVaddr(const char *entry, Elf_LinkGlobal *globals, int nglob)
+// Serializes a static executable (ET_EXEC): one R+X PT_LOAD per placed,
+// allocatable section, written at a page-congruent file offset.
+static int Elf_WriteExec(const Elf *elf, FILE *out)
 {
-    for (int g = 0; g < nglob; g++) {
-        if (strcmp(globals[g].lg_name, entry) == 0) {
-            return globals[g].lg_vaddr;
-        }
-    }
-    Elf_Fail("undefined entry symbol '%s'", entry);
-}
-
-// Resolves symbols, applies relocations and writes a static ET_EXEC.  Without
-// placement the headers, text and rodata share one R+X segment based at
-// ELF_BASE; with -place each output section gets its own segment at the
-// requested (or defaulted) address.
-static void Elf_LinkEmitExec(Elf_Obj *objs, int npaths, Elf_Buf *text, Elf_Buf *rodata,
-                             const Elf_LinkOptions *opts, FILE *out)
-{
-    int placed = opts->eo_place_text || opts->eo_place_data;
-
-    // Output section addresses.  Default: a single segment with the headers,
-    // text at ELF_BASE + headers, rodata immediately after.  Placed: each at
-    // its own address, defaulting to ELF_BASE / the page above text's end.
-    uint64_t text_vaddr, rodata_vaddr;
-    if (! placed) {
-        text_vaddr   = ELF_BASE + sizeof(Elf_Ehdr) + sizeof(Elf_Phdr);
-        rodata_vaddr = text_vaddr + text->eb_len;
-    } else {
-        text_vaddr   = opts->eo_place_text ? opts->eo_text_addr : ELF_BASE;
-        rodata_vaddr = opts->eo_place_data ? opts->eo_data_addr
-                     : (text_vaddr + text->eb_len + ELF_PAGE - 1) / ELF_PAGE * ELF_PAGE;
-    }
-
-    // Collect defined global symbols; diagnose multiple definitions.
-    int total_syms = 0;
-    for (int i = 0; i < npaths; i++) {
-        total_syms += objs[i].lo_nsyms;
-    }
-    Elf_LinkGlobal *globals = calloc(total_syms ? total_syms : 1, sizeof *globals);
-    int nglob = 0;
-    for (int i = 0; i < npaths; i++) {
-        Elf_Obj *o = &objs[i];
-        for (int k = 0; k < o->lo_nsyms; k++) {
-            Elf_Sym *sym = &o->lo_syms[k];
-            if (ELF_ST_BIND(sym->st_info) != ELF_STB_GLOBAL) {
-                continue;
-            }
-            if (sym->st_shndx == ELF_SHN_UNDEF || sym->st_shndx >= o->lo_ehdr->e_shnum) {
-                continue;
-            }
-            int outsec = o->lo_outsec[sym->st_shndx];
-            if (outsec < 0) {
-                continue;
-            }
-            const char *name = o->lo_symstr + sym->st_name;
-            for (int g = 0; g < nglob; g++) {
-                if (strcmp(globals[g].lg_name, name) == 0) {
-                    Elf_Fail("multiple definition of '%s'", name);
-                }
-            }
-            globals[nglob++] = (Elf_LinkGlobal) {
-                .lg_name  = name,
-                .lg_vaddr = Elf_OutVaddr(outsec, text_vaddr, rodata_vaddr)
-                          + o->lo_base[sym->st_shndx] + sym->st_value
-            };
-        }
-    }
-
-    // Apply each object's relocations into the merged buffers.
-    for (int i = 0; i < npaths; i++) {
-        Elf_Obj *o = &objs[i];
-        for (int s = 0; s < o->lo_ehdr->e_shnum; s++) {
-            Elf_Shdr *rs = &o->lo_shdr[s];
-            if (rs->sh_type != ELF_SHT_RELA) {
-                continue;
-            }
-            int tsec = rs->sh_info;     // input section the relocations patch
-            if (tsec >= o->lo_ehdr->e_shnum || o->lo_outsec[tsec] < 0) {
-                continue;
-            }
-            int       outsec  = o->lo_outsec[tsec];
-            Elf_Buf  *buf     = outsec == ELF_SECTION_TEXT ? text : rodata;
-            uint64_t  secbase = Elf_OutVaddr(outsec, text_vaddr, rodata_vaddr);
-            Elf_Rela *rela    = (Elf_Rela *) (o->lo_data + rs->sh_offset);
-            int       nrel    = rs->sh_size / sizeof(Elf_Rela);
-
-            for (int r = 0; r < nrel; r++) {
-                int            type     = ELF_R_TYPE(rela[r].r_info);
-                long           site_off = o->lo_base[tsec] + rela[r].r_offset;
-                uint64_t       P        = secbase + site_off;
-                uint64_t       S        = Elf_ResolveSym(o, ELF_R_SYM(rela[r].r_info),
-                                              text_vaddr, rodata_vaddr, globals, nglob);
-                int64_t        A        = rela[r].r_addend;
-                unsigned char *at       = buf->eb_data + site_off;
-
-                switch (type) {
-                    case ELF_R_X86_64_PC32:
-                    case ELF_R_X86_64_PLT32: {
-                        Elf_PatchLE(at, (uint32_t) (int32_t) (S + A - P), 4);
-                    } break;
-                    case ELF_R_X86_64_32:
-                    case ELF_R_X86_64_32S: {
-                        Elf_PatchLE(at, (uint32_t) (S + A), 4);
-                    } break;
-                    case ELF_R_X86_64_64: {
-                        Elf_PatchLE(at, S + A, 8);
-                    } break;
-                    default: {
-                        Elf_Fail("'%s': unsupported relocation type %d", o->lo_path, type);
-                    }
-                }
-            }
-        }
-    }
-
-    uint64_t entry_vaddr = Elf_EntryVaddr(opts->eo_entry, globals, nglob);
-    free(globals);
-
-    if (! placed) {
-        // One R+X segment: headers, then text, then rodata, mapped at ELF_BASE.
-        uint64_t filesz = sizeof(Elf_Ehdr) + sizeof(Elf_Phdr) + text->eb_len + rodata->eb_len;
-        Elf_Ehdr ehdr = {
-            .e_ident     = { 0x7F, 'E', 'L', 'F', ELF_CLASS64, ELF_DATA2LSB, ELF_VERSION },
-            .e_type      = ELF_TYPE_EXEC,
-            .e_machine   = ELF_MACHINE_X86_64,
-            .e_version   = ELF_VERSION,
-            .e_entry     = entry_vaddr,
-            .e_phoff     = sizeof(Elf_Ehdr),
-            .e_ehsize    = sizeof(Elf_Ehdr),
-            .e_phentsize = sizeof(Elf_Phdr),
-            .e_phnum     = 1
-        };
-        Elf_Phdr phdr = {
-            .p_type   = ELF_PT_LOAD,
-            .p_flags  = ELF_PF_R | ELF_PF_X,
-            .p_offset = 0,
-            .p_vaddr  = ELF_BASE,
-            .p_paddr  = ELF_BASE,
-            .p_filesz = filesz,
-            .p_memsz  = filesz,
-            .p_align  = ELF_PAGE
-        };
-        fwrite(&ehdr, sizeof(ehdr), 1, out);
-        fwrite(&phdr, sizeof(phdr), 1, out);
-        fwrite(text->eb_data, 1, text->eb_len, out);
-        fwrite(rodata->eb_data, 1, rodata->eb_len, out);
-        return;
-    }
-
-    // Placed: one R+X PT_LOAD per non-empty output section, at its address.
-    Elf_Seg segs[2];
+    // Phase: select the loadable sections.
+    Elf_Sec **segs = calloc(elf->elf_nsecs ? elf->elf_nsecs : 1, sizeof *segs);
+    uint64_t *offs = calloc(elf->elf_nsecs ? elf->elf_nsecs : 1, sizeof *offs);
     int nseg = 0;
-    if (text->eb_len) {
-        segs[nseg++] = (Elf_Seg) { text, text_vaddr, 0 };
-    }
-    if (rodata->eb_len) {
-        segs[nseg++] = (Elf_Seg) { rodata, rodata_vaddr, 0 };
+    for (size_t i = 0; i < elf->elf_nsecs; i++) {
+        Elf_Sec *sec = elf->elf_secs[i];
+        if ((sec->sec_flags & ELF_SHF_ALLOC) && sec->sec_data.eb_len) {
+            segs[nseg++] = sec;
+        }
     }
 
-    uint64_t pos = sizeof(Elf_Ehdr) + (uint64_t) nseg * sizeof(Elf_Phdr);
+    // Phase: assign page-congruent file offsets.
+    uint64_t pos = sizeof(Elf64_Ehdr) + (uint64_t) nseg * sizeof(Elf64_Phdr);
     for (int i = 0; i < nseg; i++) {
-        segs[i].es_offset = Elf_PlaceOffset(pos, segs[i].es_vaddr);
-        pos = segs[i].es_offset + segs[i].es_buf->eb_len;
+        offs[i] = Elf_PlaceOffset(pos, segs[i]->sec_addr);
+        pos = offs[i] + segs[i]->sec_data.eb_len;
     }
 
-    Elf_Ehdr ehdr = {
+    Elf64_Ehdr ehdr = {
         .e_ident     = { 0x7F, 'E', 'L', 'F', ELF_CLASS64, ELF_DATA2LSB, ELF_VERSION },
-        .e_type      = ELF_TYPE_EXEC,
-        .e_machine   = ELF_MACHINE_X86_64,
+        .e_type      = ELF_ET_EXEC,
+        .e_machine   = elf->elf_machine,
         .e_version   = ELF_VERSION,
-        .e_entry     = entry_vaddr,
-        .e_phoff     = sizeof(Elf_Ehdr),
-        .e_ehsize    = sizeof(Elf_Ehdr),
-        .e_phentsize = sizeof(Elf_Phdr),
-        .e_phnum     = nseg
+        .e_entry     = elf->elf_entry,
+        .e_phoff     = sizeof(Elf64_Ehdr),
+        .e_ehsize    = sizeof(Elf64_Ehdr),
+        .e_phentsize = sizeof(Elf64_Phdr),
+        .e_phnum     = (uint16_t) nseg
     };
-    fwrite(&ehdr, sizeof(ehdr), 1, out);
+    fwrite(&ehdr, sizeof ehdr, 1, out);
     for (int i = 0; i < nseg; i++) {
-        Elf_Phdr phdr = {
+        Elf64_Phdr phdr = {
             .p_type   = ELF_PT_LOAD,
             .p_flags  = ELF_PF_R | ELF_PF_X,
-            .p_offset = segs[i].es_offset,
-            .p_vaddr  = segs[i].es_vaddr,
-            .p_paddr  = segs[i].es_vaddr,
-            .p_filesz = segs[i].es_buf->eb_len,
-            .p_memsz  = segs[i].es_buf->eb_len,
+            .p_offset = offs[i],
+            .p_vaddr  = segs[i]->sec_addr,
+            .p_paddr  = segs[i]->sec_addr,
+            .p_filesz = segs[i]->sec_data.eb_len,
+            .p_memsz  = segs[i]->sec_data.eb_len,
             .p_align  = ELF_PAGE
         };
-        fwrite(&phdr, sizeof(phdr), 1, out);
+        fwrite(&phdr, sizeof phdr, 1, out);
     }
-    long fpos = sizeof(Elf_Ehdr) + (long) nseg * sizeof(Elf_Phdr);
+    long pos2 = sizeof(Elf64_Ehdr) + (long) nseg * sizeof(Elf64_Phdr);
     for (int i = 0; i < nseg; i++) {
-        while (fpos < (long) segs[i].es_offset) {
+        while (pos2 < (long) offs[i]) {
             fputc(0, out);
-            fpos++;
+            pos2++;
         }
-        fwrite(segs[i].es_buf->eb_data, 1, segs[i].es_buf->eb_len, out);
-        fpos += segs[i].es_buf->eb_len;
+        fwrite(segs[i]->sec_data.eb_data, 1, segs[i]->sec_data.eb_len, out);
+        pos2 += segs[i]->sec_data.eb_len;
     }
+
+    free(segs);
+    free(offs);
+    return 0;
 }
 
-// Links npaths ET_REL objects into an executable or, with -r, a merged object.
-void Elf_Link(const char *const *paths, int npaths, const Elf_LinkOptions *opts, FILE *out)
+// Serializes an object to an open stream, returning 0 on success or -1.
+int Elf_WriteFile(const Elf *elf, FILE *out)
 {
-    Elf_Obj *objs = calloc(npaths, sizeof *objs);
-    for (int i = 0; i < npaths; i++) {
-        Elf_LoadObj(&objs[i], paths[i]);
+    if (elf->elf_type == ELF_ET_EXEC) {
+        return Elf_WriteExec(elf, out);
     }
+    return Elf_WriteRel(elf, out);
+}
 
-    Elf_Buf text = {0}, rodata = {0};
-    Elf_MergeSections(objs, npaths, &text, &rodata);
+// Serializes an object to a file, returning 0 on success or -1 on error.
+int Elf_Write(const Elf *elf, const char *path)
+{
+    FILE *out = fopen(path, "wb");
+    if (! out) {
+        return -1;
+    }
+    int rc = Elf_WriteFile(elf, out);
+    fclose(out);
+    return rc;
+}
 
-    if (opts->eo_relocatable) {
-        Elf_LinkEmitRel(objs, npaths, &text, &rodata, out);
-    } else {
-        Elf_LinkOptions resolved = *opts;
-        if (! resolved.eo_entry) {
-            resolved.eo_entry = "_start";
+// --- Elf_Read: bytes -> model --------------------------------------------
+
+// Validates the file header and returns it, or NULL if it is not an ELF object.
+static const Elf64_Ehdr *Elf_ReadEhdr(const uint8_t *data, size_t n)
+{
+    if (n < sizeof(Elf64_Ehdr)) {
+        return NULL;
+    }
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *) data;
+    if (eh->e_ident[0] != 0x7F || eh->e_ident[1] != 'E' ||
+        eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F') {
+        return NULL;
+    }
+    return eh;
+}
+
+// Parses ELF bytes into a new object, or returns NULL on error.
+Elf *Elf_ReadMem(const void *buf, size_t n)
+{
+    const uint8_t    *data = buf;
+    const Elf64_Ehdr *eh   = Elf_ReadEhdr(data, n);
+    if (! eh) {
+        return NULL;
+    }
+    const Elf64_Shdr *sh    = (const Elf64_Shdr *) (data + eh->e_shoff);
+    int               shnum = eh->e_shnum;
+    const char       *shstr = (const char *) (data + sh[eh->e_shstrndx].sh_offset);
+
+    Elf *elf = Elf_New(eh->e_type, eh->e_machine);
+    elf->elf_entry = eh->e_entry;
+
+    // Phase: reconstruct the model's own sections (skip the synthesized ones).
+    Elf_Sec **secmap = calloc(shnum ? shnum : 1, sizeof *secmap);
+    for (int i = 1; i < shnum; i++) {
+        if (sh[i].sh_type != ELF_SHT_PROGBITS) {
+            continue;
         }
-        Elf_LinkEmitExec(objs, npaths, &text, &rodata, &resolved, out);
+        const char *name = shstr + sh[i].sh_name;
+        Elf_Sec *sec = Elf_SectionAdd(elf, name, sh[i].sh_type, sh[i].sh_flags);
+        sec->sec_addr      = sh[i].sh_addr;
+        sec->sec_addralign = sh[i].sh_addralign ? sh[i].sh_addralign : 1;
+        sec->sec_entsize   = sh[i].sh_entsize;
+        Elf_BufData(&sec->sec_data, data + sh[i].sh_offset, sh[i].sh_size);
+        secmap[i] = sec;
     }
 
-    free(text.eb_data);
-    free(rodata.eb_data);
-    for (int i = 0; i < npaths; i++) {
-        free(objs[i].lo_data);
-        free(objs[i].lo_outsec);
-        free(objs[i].lo_base);
+    // Phase: rebuild the symbol table, resolving names and defining sections.
+    const Elf64_Sym *syms   = NULL;
+    int              nsyms  = 0;
+    const char      *symstr = NULL;
+    for (int i = 0; i < shnum; i++) {
+        if (sh[i].sh_type == ELF_SHT_SYMTAB) {
+            syms   = (const Elf64_Sym *) (data + sh[i].sh_offset);
+            nsyms  = sh[i].sh_size / sizeof(Elf64_Sym);
+            symstr = (const char *) (data + sh[sh[i].sh_link].sh_offset);
+            break;
+        }
     }
-    free(objs);
+
+    Elf_Sym **symmap = calloc(nsyms ? nsyms : 1, sizeof *symmap);
+    for (int i = 1; i < nsyms; i++) {
+        const Elf64_Sym *sym  = &syms[i];
+        const char      *name = symstr + sym->st_name;
+        Elf_Sec         *sec  = (sym->st_shndx != ELF_SHN_UNDEF && sym->st_shndx < shnum)
+                                    ? secmap[sym->st_shndx] : NULL;
+        symmap[i] = Elf_SymbolAdd(elf, name, sec, sym->st_value,
+                                  ELF_ST_BIND(sym->st_info), ELF_ST_TYPE(sym->st_info));
+        symmap[i]->sym_size  = sym->st_size;
+        symmap[i]->sym_other = sym->st_other;
+    }
+
+    // Phase: rebuild relocations, attaching each to the section it patches.
+    for (int i = 0; i < shnum; i++) {
+        if (sh[i].sh_type != ELF_SHT_RELA) {
+            continue;
+        }
+        Elf_Sec *target = (sh[i].sh_info < (uint32_t) shnum) ? secmap[sh[i].sh_info] : NULL;
+        if (! target) {
+            continue;
+        }
+        const Elf64_Rela *rela = (const Elf64_Rela *) (data + sh[i].sh_offset);
+        int               nrel = sh[i].sh_size / sizeof(Elf64_Rela);
+        for (int r = 0; r < nrel; r++) {
+            uint32_t si  = ELF_R_SYM(rela[r].r_info);
+            Elf_Sym *sym = (si < (uint32_t) nsyms) ? symmap[si] : NULL;
+            Elf_RelaAdd(target, rela[r].r_offset, sym,
+                        ELF_R_TYPE(rela[r].r_info), rela[r].r_addend);
+        }
+    }
+
+    free(secmap);
+    free(symmap);
+    return elf;
+}
+
+// Parses an ELF file into a new object, or returns NULL on error.
+Elf *Elf_Read(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    if (! file) {
+        return NULL;
+    }
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    uint8_t *buf = malloc(size > 0 ? size : 1);
+    if (fread(buf, 1, size, file) != (size_t) size) {
+        free(buf);
+        fclose(file);
+        return NULL;
+    }
+    fclose(file);
+
+    Elf *elf = Elf_ReadMem(buf, size);
+    free(buf);
+    return elf;
 }

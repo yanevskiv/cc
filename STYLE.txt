@@ -36,12 +36,28 @@ C code:
 
     Comments:
 
-        Every function and every global variable (including macros) has
-        one short `//` line directly above it, no blank line in between,
-        saying what it is -- just like cc.c.  Enum and struct members
-        may have a trailing `//` note.  Do not write banner or section
-        comments such as `// --- text back end ---`; the per-item comments
-        carry the file.
+        In a `.c` file, every function and every global variable
+        (including macros) has one short `//` line directly above it, no
+        blank line in between, saying what it is -- just like cc.c.  A
+        `.h` file instead gives an overview: group related declarations,
+        separate the groups with a blank line and put one `//` line above
+        each group rather than repeating a comment per prototype, the way
+        str.h and elf.h do.  Repeating in the header what the source
+        already documents is just noise.
+
+        A header group comment only names the group; it does not describe
+        it, and it carries no trailing period because it is a label, not a
+        sentence.  Write "Code emission helpers" not "Code emission
+        helpers: expressions, statements and the stack." -- the prototypes
+        below it already say what each one does.
+
+        Every `//` comment is at most one line, in headers and sources
+        alike, and that includes the comment above a struct or typedef.
+        If a sentence does not fit, shorten the thought rather than
+        wrapping it across two lines.  Enum and struct members may have a
+        trailing `//` note.  Do not write banner or section comments such
+        as `// --- text back end ---`; the per-item and per-group
+        comments carry the file.
 
         Inside a function body, a comment may only divide the code
         into named phases (e.g. "Front end" / "Back end" in main, or
@@ -57,6 +73,12 @@ C code:
         Four-space indent, no tabs.  Functions are always written
         out in full -- never collapse a body onto one line, even a
         single-statement helper.  One blank line between functions.
+
+        Names: avoid single-letter variable and parameter names.
+        Give a variable the name of what it holds -- buf for an
+        Elf_Buf, elf for an Elf, sec for an Elf_Sec, rel for an
+        Elf_Rela, sym for an Elf_Sym.  The only exceptions are short
+        loop counters and counts: i, n and the like are fine.
 
         One function per thing.  Prefer many small, named functions
         over one that switches on a tag.  Each x86 instruction has

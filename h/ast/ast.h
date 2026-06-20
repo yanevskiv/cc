@@ -76,40 +76,22 @@ struct Ast_Func {
 // The finished program, produced by the parser.
 extern Ast_Func *Ast_Program;
 
-// Interns a string literal and returns its table slot.
-int Ast_AddString(char *s);
-
-// Allocates a zeroed node of the given kind.
+// Node construction
 Ast_Node *Ast_NewNode(Ast_NodeKind kind);
-
-// Builds a binary-operator node with the given operands.
 Ast_Node *Ast_NewBinary(Ast_NodeKind kind, Ast_Node *lhs, Ast_Node *rhs);
-
-// Builds a unary-operator node with the given operand.
 Ast_Node *Ast_NewUnary(Ast_NodeKind kind, Ast_Node *lhs);
-
-// Builds an integer-literal node.
 Ast_Node *Ast_NewNum(long val);
-
-// Builds a node that references a local variable.
 Ast_Node *Ast_NewVarNode(Ast_Var *var);
 
-// Starts a fresh variable scope for a new function.
-void Ast_BeginScope(void);
-
-// Looks up a variable by name in the current scope, or NULL.
+// Variable scopes
+void     Ast_BeginScope(void);
 Ast_Var *Ast_FindVar(const char *name);
-
-// Declares a variable in the current scope, reusing any existing slot.
 Ast_Var *Ast_DeclareVar(const char *name);
-
-// Returns the list of locals declared in the current scope.
 Ast_Var *Ast_CurrentLocals(void);
 
-// Returns the number of interned string literals.
-int Ast_StringCount(void);
-
-// Returns the interned string literal in the given slot.
+// String literal interning
+int   Ast_AddString(char *s);
+int   Ast_StringCount(void);
 char *Ast_StringAt(int idx);
 
 #endif // AST_H
