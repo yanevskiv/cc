@@ -18,15 +18,17 @@ C code:
 
             Ast_*   abstract syntax tree (front end)
             Gen_*   code generation (AST -> instruction list)
-            Asm_*   instruction IR and AT&T text printer
+            Asm_*   instruction IR: operand/instruction model and builder
             Enc_*   machine-code encoder (instruction list -> ELF object)
+            Txt_*   textual assembly codec (instruction list <-> .s source)
             Elf_*   ELF image: section buffers, symbols, object output
             Rel_*   architecture relocation types and patching
-            Link_*  static linker driver
+            Link_*  static linker policy: merge, resolve, place
             Str_*   string helpers
 
         An architecture-specific module carries an arch infix:
-        Asm_x86_64_*, Enc_x86_64_*, Gen_x86_64_*, Rel_x86_64_*.
+        Asm_x86_64_*, Enc_x86_64_*, Txt_x86_64_*, Gen_x86_64_*,
+        Rel_x86_64_*.
 
         Every function and global is Prefix_PascalCase, e.g. Gen_EmitExpr,
         Asm_EmitAdd, Ast_Program.  A module's names live in h/<mod>.h, and
@@ -37,6 +39,12 @@ C code:
         function is declared -- none is hidden behind `static`.  A module's
         file-scope state (its static variables) and private #defines stay
         in the .c; the header maps the interface, not the storage.
+
+        The tool drivers are the exception.  cc.c, as.c and ld.c are each
+        an int main() plus a few private helpers over the modules above,
+        and have no header of their own; those helpers (As_* in as.c, Ld_*
+        in ld.c) are static, since a driver is short enough that the file
+        itself is the overview a header would otherwise give.
 
         Struct fields take a short lower-case tag derived from the type,
         used on every field of that struct:

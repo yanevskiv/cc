@@ -6,6 +6,7 @@
 #include "util/link.h"
 #include "arch/x86_64/asm.h"
 #include "arch/x86_64/enc.h"
+#include "arch/x86_64/txt.h"
 #include "arch/x86_64/gen.h"
 
 // Number of integer arguments the ABI passes in registers; the rest go on the stack.
@@ -402,7 +403,7 @@ void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding)
 void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 0);
-    Asm_x86_64_PrintText(out);
+    Txt_x86_64_Att_Write(out);
 }
 
 // Encodes the whole program as a freestanding static ET_EXEC, linked in place, to out.

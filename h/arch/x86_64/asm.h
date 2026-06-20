@@ -2,7 +2,6 @@
 #define ASM_X86_64_H
 
 #include <stdint.h>
-#include <stdio.h>
 
 // Registers
 typedef enum {
@@ -160,10 +159,5 @@ void Asm_x86_64_EmitJne(const char *label, ...) __attribute__((format(printf, 1,
 void Asm_x86_64_EmitCall(const char *label, ...) __attribute__((format(printf, 1, 2)));
 void Asm_x86_64_EmitRet(void);
 void Asm_x86_64_EmitSyscall(void);
-
-// Text output
-void Asm_x86_64_PrintOperand(FILE *out, const Asm_x86_64_Operand *op);
-void Asm_x86_64_PrintInstr(FILE *out, const Asm_x86_64_Item *item);
-void Asm_x86_64_PrintText(FILE *out);
 
 #endif // ASM_X86_64_H

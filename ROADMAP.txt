@@ -33,15 +33,19 @@ Naming conventions:
 
     Ast_*   abstract syntax tree (front end)
     Gen_*   code generation (AST -> instruction list)
-    Asm_*   instruction IR, text printer, text parser and machine-code
-            encoder
+    Asm_*   instruction list (IR): operand / instruction model and builder
+    Enc_*   machine-code encoder: Asm_* -> Elf_* object bytes (ET_REL)
+    Txt_*   textual assembly codec: Asm_* <-> .s source, split by syntax
+            (AT&T now, room for Intel)
     Elf_*   generic ELF object library: byte buffers, sections, symbols,
             relocations, and read/write of ET_REL and ET_EXEC -- no policy,
             no exit(), and no section is named by the library (Stage 5b)
     Link_*  linker policy over Elf_*: merge sections, resolve symbols
-    Reloc_* machine relocation application (x86-64 R_X86_64_* semantics)
-    As_*    assembler driver (build/bin/as): argument parsing over Asm_*
-    Ld_*    linker driver (build/bin/ld): argument parsing over Link_*
+    Rel_*   machine relocation application (x86-64 R_X86_64_* semantics)
+    As_*    assembler driver: as.c's int main() and static helpers (the
+            file has no header), argument parsing over Txt_*/Enc_*
+    Ld_*    linker driver: ld.c's int main() and static helpers (the file
+            has no header), argument parsing over Link_*
     Str_*   string helpers (incl. <regex.h> wrappers for the assembler)
 
 Tools (binaries):
@@ -57,10 +61,10 @@ Tools (binaries):
 
 Module dependency:
 
-    Gen_*  ->  Asm_*  ->  { Asm_PrintText -> .s              (debug / -S)
-                            Asm_Encode     -> Elf_* (ET_REL)  (-c)  }
-    As_*   ->  Asm_Parse (.s -> IR) -> Asm_Encode -> Elf_* (ET_REL)
-    Ld_*   ->  Link_*/Reloc_*  ->  Elf_* (read ET_REL, write ET_EXEC/ET_REL)
+    Gen_*  ->  Asm_*  ->  { Txt_Write  -> .s              (debug / -S)
+                            Enc_Object -> Elf_* (ET_REL)  (-c)  }
+    As_*   ->  Txt_Parse (.s -> Asm_*) -> Enc_Object -> Elf_* (ET_REL)
+    Ld_*   ->  Link_*/Rel_*  ->  Elf_* (read ET_REL, write ET_EXEC/ET_REL)
 
 --------------------------------------------------------------------------
 
@@ -239,17 +243,17 @@ Stage 6 -- as (assembler: .s -> .o)
 
     The encoder and the ET_REL writer already exist (Stages 2-3), so the
     assembler is mostly a front end: parse AT&T text into the same Asm_*
-    instruction list, then reuse Asm_Encode + the Elf_* object writer.  It
-    is the inverse of Asm_PrintText, and because cc -S emits exactly the
+    instruction list, then reuse Enc_* + the Elf_* object writer.  It
+    is the inverse of Txt_*'s writer, and because cc -S emits exactly the
     syntax as parses, the two round-trip by construction.
 
     Parsing is line-oriented and regex-driven: extend Str_* with thin
     <regex.h> wrappers (Str_RegexMatch, Str_RegexExtract), then match the
     three line shapes -- `label:`, `.directive args`, `mnemonic op, op`.
     Operands cover the forms the printer emits: %reg, $imm, disp(%base),
-    sym(%rip), sym.  A new Asm_Parse (in asm.c, paired with Asm_PrintText)
-    turns text into the IR; src/as.c (As_*) is just main + file I/O +
-    argument parsing.
+    sym(%rip), sym.  A new Txt_x86_64_Att_Parse (in txt.c, paired with
+    Txt_x86_64_Att_Write) turns text into the IR; src/as.c (As_*) is just
+    main + file I/O + argument parsing.
 
     Directive set is small -- what cc -S emits, plus a little:
         .text .data .section .rodata .globl/.global .extern
