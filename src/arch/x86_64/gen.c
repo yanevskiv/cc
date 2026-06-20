@@ -76,7 +76,7 @@ void Gen_x86_64_EmitAddr(Ast_Node *node)
 }
 
 // Counts the arguments in a call's argument list.
-static int Gen_x86_64_CallCountArgs(Ast_Node *args)
+int Gen_x86_64_CallCountArgs(Ast_Node *args)
 {
     int nArgs = 0;
     for (Ast_Node *arg = args; arg; arg = arg->an_next) {
@@ -86,7 +86,7 @@ static int Gen_x86_64_CallCountArgs(Ast_Node *args)
 }
 
 // Evaluates call arguments and pushes them so the first lands on top.
-static void Gen_x86_64_CallPushArgs(Ast_Node *arg)
+void Gen_x86_64_CallPushArgs(Ast_Node *arg)
 {
     if (!arg) {
         return;
@@ -97,7 +97,7 @@ static void Gen_x86_64_CallPushArgs(Ast_Node *arg)
 }
 
 // Pops the first nReg pushed arguments into the ABI argument registers.
-static void Gen_x86_64_CallPopArgs(int nReg)
+void Gen_x86_64_CallPopArgs(int nReg)
 {
     for (int i = 0; i < nReg; i++) {
         Gen_x86_64_EmitPop(Gen_x86_64_ArgReg[i]);
@@ -325,7 +325,7 @@ void Gen_x86_64_EmitDataSection(void)
 }
 
 // Emits the _start runtime: call main, then exit with its return value.
-static void Gen_x86_64_EmitStartup(void)
+void Gen_x86_64_EmitStartup(void)
 {
     Asm_x86_64_EmitGlobl("_start");
     Asm_x86_64_EmitLabel("_start");
@@ -336,7 +336,7 @@ static void Gen_x86_64_EmitStartup(void)
 }
 
 // Emits the prologue, body and epilogue for every function.
-static void Gen_x86_64_EmitFunctions(Ast_Func *prog)
+void Gen_x86_64_EmitFunctions(Ast_Func *prog)
 {
     for (Ast_Func *func = prog; func; func = func->af_next) {
         Gen_x86_64_AssignLvarOffsets(func);
@@ -386,7 +386,7 @@ void Gen_x86_64_EmitTextSection(Ast_Func *prog, int freestanding)
 }
 
 // Builds the instruction list for the whole program.
-static void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding)
+void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding)
 {
     Asm_x86_64_Reset();
     Gen_x86_64_Depth   = 0;
@@ -405,8 +405,7 @@ void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
     Asm_x86_64_PrintText(out);
 }
 
-// Encodes the whole program as a freestanding ELF executable to out: the
-// single-module object is linked in place into a static ET_EXEC.
+// Encodes the whole program as a freestanding static ET_EXEC, linked in place, to out.
 void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 1);
@@ -417,9 +416,7 @@ void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
     Elf_Free(elf);
 }
 
-// Encodes the whole program as a relocatable ELF object (.o) to out.  Unlike
-// the freestanding path it keeps external references (e.g. printf) undefined
-// and leaves _start to the runtime, for a linker to resolve later.
+// Encodes the whole program as a relocatable ELF object (.o) to out, references left undefined.
 void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 0);
@@ -428,8 +425,7 @@ void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
     Elf_Free(elf);
 }
 
-// Stage 4 harness: a relocatable object that also carries the _start runtime,
-// so the link core has an entry point until the Stage 7 crt supplies one.
+// Stage 4 harness: a relocatable object that also carries the _start runtime.
 void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog)
 {
     Gen_x86_64_BuildProgram(prog, 1);

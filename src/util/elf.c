@@ -3,114 +3,6 @@
 #include <string.h>
 #include "util/elf.h"
 
-// ELF identification bytes: 64-bit, little-endian, version 1.
-#define ELF_CLASS64  2
-#define ELF_DATA2LSB 1
-#define ELF_VERSION  1
-
-// Virtual address an executable is loaded at, and the page size segments align.
-#define ELF_BASE 0x400000
-#define ELF_PAGE 0x1000
-
-// Loadable program-header segment, readable and executable.
-#define ELF_PT_LOAD 1
-#define ELF_PF_R 4
-#define ELF_PF_X 1
-
-// The undefined section index used by external references.
-#define ELF_SHN_UNDEF 0
-
-// Packs and unpacks the symbol binding/type nibbles of st_info.
-#define ELF_ST_INFO(bind, type) (((bind) << 4) | ((type) & 0xF))
-#define ELF_ST_BIND(info) ((info) >> 4)
-#define ELF_ST_TYPE(info) ((info) & 0xF)
-
-// Packs and unpacks the symbol index and type of r_info.
-#define ELF_R_INFO(sym, type) (((uint64_t) (sym) << 32) | (uint32_t) (type))
-#define ELF_R_SYM(info)  ((uint32_t) ((info) >> 32))
-#define ELF_R_TYPE(info) ((uint32_t) ((info) & 0xFFFFFFFF))
-
-// The fixed-size ELF file header, on disk.
-typedef struct {
-    uint8_t  e_ident[16];
-    uint16_t e_type;
-    uint16_t e_machine;
-    uint32_t e_version;
-    uint64_t e_entry;
-    uint64_t e_phoff;
-    uint64_t e_shoff;
-    uint32_t e_flags;
-    uint16_t e_ehsize;
-    uint16_t e_phentsize;
-    uint16_t e_phnum;
-    uint16_t e_shentsize;
-    uint16_t e_shnum;
-    uint16_t e_shstrndx;
-} Elf64_Ehdr;
-
-// One program header, describing a segment to load.
-typedef struct {
-    uint32_t p_type;
-    uint32_t p_flags;
-    uint64_t p_offset;
-    uint64_t p_vaddr;
-    uint64_t p_paddr;
-    uint64_t p_filesz;
-    uint64_t p_memsz;
-    uint64_t p_align;
-} Elf64_Phdr;
-
-// One section header in the section header table.
-typedef struct {
-    uint32_t sh_name;
-    uint32_t sh_type;
-    uint64_t sh_flags;
-    uint64_t sh_addr;
-    uint64_t sh_offset;
-    uint64_t sh_size;
-    uint32_t sh_link;
-    uint32_t sh_info;
-    uint64_t sh_addralign;
-    uint64_t sh_entsize;
-} Elf64_Shdr;
-
-// One entry in an on-disk .symtab.
-typedef struct {
-    uint32_t st_name;
-    uint8_t  st_info;
-    uint8_t  st_other;
-    uint16_t st_shndx;
-    uint64_t st_value;
-    uint64_t st_size;
-} Elf64_Sym;
-
-// One entry in an on-disk .rela.* section.
-typedef struct {
-    uint64_t r_offset;
-    uint64_t r_info;
-    int64_t  r_addend;
-} Elf64_Rela;
-
-// An ELF object: header fields, the section list, the symbol table and a pool
-// that owns every section/symbol name string.
-struct Elf {
-    uint16_t    elf_type;
-    uint16_t    elf_machine;
-    uint64_t    elf_entry;
-    Elf_Sec   **elf_secs;
-    size_t      elf_nsecs;
-    size_t      elf_capsecs;
-    Elf_Sym   **elf_syms;
-    size_t      elf_nsyms;
-    size_t      elf_capsyms;
-    char      **elf_pool;
-    size_t      elf_npool;
-    size_t      elf_cappool;
-    const char *elf_err;
-};
-
-// --- Elf_Buf: growable byte buffers --------------------------------------
-
 // Initializes an empty byte buffer.
 void Elf_BufInit(Elf_Buf *buf)
 {
@@ -129,7 +21,7 @@ void Elf_BufFree(Elf_Buf *buf)
 }
 
 // Grows a buffer so it can hold at least n more bytes.
-static void Elf_BufReserve(Elf_Buf *buf, size_t n)
+void Elf_BufReserve(Elf_Buf *buf, size_t n)
 {
     if (buf->eb_len + n <= buf->eb_cap) {
         return;
@@ -215,10 +107,8 @@ size_t Elf_BufAlign(Elf_Buf *buf, size_t align)
     return buf->eb_len;
 }
 
-// --- Elf object lifecycle ------------------------------------------------
-
 // Interns a name into the object's string pool, returning an owned copy.
-static const char *Elf_Intern(Elf *elf, const char *name)
+const char *Elf_Intern(Elf *elf, const char *name)
 {
     if (! name) {
         name = "";
@@ -289,8 +179,6 @@ const char *Elf_Error(const Elf *elf)
     return elf->elf_err;
 }
 
-// --- Elf_Section: the section list ---------------------------------------
-
 // Appends a new section and returns it.
 Elf_Sec *Elf_SectionAdd(Elf *elf, const char *name, uint32_t type, uint64_t flags)
 {
@@ -354,8 +242,6 @@ void Elf_SectionAddr(Elf_Sec *sec, uint64_t addr)
     sec->sec_addr = addr;
 }
 
-// --- Elf_Symbol: the symbol table ----------------------------------------
-
 // Appends a symbol and returns it.  sec == NULL records an undefined reference.
 Elf_Sym *Elf_SymbolAdd(Elf *elf, const char *name, Elf_Sec *sec,
                        uint64_t value, uint8_t bind, uint8_t type)
@@ -398,8 +284,6 @@ Elf_Sym *Elf_SymbolAt(const Elf *elf, size_t i)
     return elf->elf_syms[i];
 }
 
-// --- Elf_Rela: relocations owned by the section they patch ---------------
-
 // Appends a relocation to the section it patches and returns it.
 Elf_Rela *Elf_RelaAdd(Elf_Sec *target, uint64_t offset, Elf_Sym *sym,
                       uint32_t type, int64_t addend)
@@ -429,10 +313,8 @@ Elf_Rela *Elf_RelaAt(const Elf_Sec *target, size_t i)
     return (Elf_Rela *) &target->sec_relas[i];
 }
 
-// --- Elf_Write: model -> bytes -------------------------------------------
-
 // Appends name and a NUL to a string table, returning name's start offset.
-static uint32_t Elf_WriteStr(Elf_Buf *strtab, const char *name)
+uint32_t Elf_WriteStr(Elf_Buf *strtab, const char *name)
 {
     uint32_t off = (uint32_t) strtab->eb_len;
     Elf_BufData(strtab, name, strlen(name) + 1);
@@ -440,7 +322,7 @@ static uint32_t Elf_WriteStr(Elf_Buf *strtab, const char *name)
 }
 
 // Position of a section within the object, used to fill in section indices.
-static uint32_t Elf_SectionIndex(const Elf *elf, const Elf_Sec *sec, const uint32_t *secidx)
+uint32_t Elf_SectionIndex(const Elf *elf, const Elf_Sec *sec, const uint32_t *secidx)
 {
     for (size_t i = 0; i < elf->elf_nsecs; i++) {
         if (elf->elf_secs[i] == sec) {
@@ -450,9 +332,8 @@ static uint32_t Elf_SectionIndex(const Elf *elf, const Elf_Sec *sec, const uint3
     return 0;
 }
 
-// Builds the .symtab and .strtab bodies, ordering symbols locals-before-globals,
-// recording each symbol's final index in slot[] and the first global index.
-static void Elf_WriteSymtab(const Elf *elf, const uint32_t *secidx, Elf_Buf *symtab,
+// Builds the .symtab and .strtab bodies, locals before globals, recording indices in slot[].
+void Elf_WriteSymtab(const Elf *elf, const uint32_t *secidx, Elf_Buf *symtab,
                             Elf_Buf *strtab, uint32_t *slot, uint32_t *first_global)
 {
     Elf64_Sym null = {0};
@@ -491,7 +372,7 @@ static void Elf_WriteSymtab(const Elf *elf, const uint32_t *secidx, Elf_Buf *sym
 }
 
 // Builds one .rela.* body from a section's relocations, using final indices.
-static void Elf_WriteRelas(const Elf_Sec *sec, const uint32_t *slot,
+void Elf_WriteRelas(const Elf_Sec *sec, const uint32_t *slot,
                            const Elf *elf, Elf_Buf *out)
 {
     for (size_t r = 0; r < sec->sec_nrelas; r++) {
@@ -512,10 +393,8 @@ static void Elf_WriteRelas(const Elf_Sec *sec, const uint32_t *slot,
     }
 }
 
-// Serializes a relocatable object (ET_REL): the model's sections plus a
-// synthesized .symtab/.strtab, a .rela.<name> for each relocated section and
-// .shstrtab.  Indices, string offsets, sh_link and sh_info are all built here.
-static int Elf_WriteRel(const Elf *elf, FILE *out)
+// Serializes a relocatable object (ET_REL): sections, .symtab/.strtab, .rela.* and .shstrtab.
+int Elf_WriteRel(const Elf *elf, FILE *out)
 {
     size_t nuser = elf->elf_nsecs;
 
@@ -680,16 +559,14 @@ static int Elf_WriteRel(const Elf *elf, FILE *out)
     return 0;
 }
 
-// Smallest file offset >= pos that is page-congruent with vaddr, as a PT_LOAD
-// mapping requires (p_offset == p_vaddr, modulo the page size).
-static uint64_t Elf_PlaceOffset(uint64_t pos, uint64_t vaddr)
+// Smallest file offset >= pos that is page-congruent with vaddr, as PT_LOAD requires.
+uint64_t Elf_PlaceOffset(uint64_t pos, uint64_t vaddr)
 {
     return pos + (vaddr - pos) % ELF_PAGE;
 }
 
-// Serializes a static executable (ET_EXEC): one R+X PT_LOAD per placed,
-// allocatable section, written at a page-congruent file offset.
-static int Elf_WriteExec(const Elf *elf, FILE *out)
+// Serializes a static executable (ET_EXEC): one R+X PT_LOAD per placed section.
+int Elf_WriteExec(const Elf *elf, FILE *out)
 {
     // Phase: select the loadable sections.
     Elf_Sec **segs = calloc(elf->elf_nsecs ? elf->elf_nsecs : 1, sizeof *segs);
@@ -770,10 +647,8 @@ int Elf_Write(const Elf *elf, const char *path)
     return rc;
 }
 
-// --- Elf_Read: bytes -> model --------------------------------------------
-
 // Validates the file header and returns it, or NULL if it is not an ELF object.
-static const Elf64_Ehdr *Elf_ReadEhdr(const uint8_t *data, size_t n)
+const Elf64_Ehdr *Elf_ReadEhdr(const uint8_t *data, size_t n)
 {
     if (n < sizeof(Elf64_Ehdr)) {
         return NULL;

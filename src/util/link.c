@@ -11,7 +11,7 @@
 #define LINK_PAGE 0x1000
 
 // Index of a section within an object, or -1 if it holds none.
-static long Link_SectionIndex(const Elf *elf, const Elf_Sec *target)
+long Link_SectionIndex(const Elf *elf, const Elf_Sec *target)
 {
     for (size_t i = 0; i < Elf_SectionCount(elf); i++) {
         if (Elf_SectionAt(elf, i) == target) {
@@ -22,7 +22,7 @@ static long Link_SectionIndex(const Elf *elf, const Elf_Sec *target)
 }
 
 // Index of a symbol within an object, or -1 if it holds none.
-static long Link_SymbolIndex(const Elf *elf, const Elf_Sym *target)
+long Link_SymbolIndex(const Elf *elf, const Elf_Sym *target)
 {
     for (size_t i = 0; i < Elf_SymbolCount(elf); i++) {
         if (Elf_SymbolAt(elf, i) == target) {
@@ -33,7 +33,7 @@ static long Link_SymbolIndex(const Elf *elf, const Elf_Sym *target)
 }
 
 // Finds an existing global symbol by name, or returns NULL.
-static Elf_Sym *Link_FindGlobal(Elf *elf, const char *name)
+Elf_Sym *Link_FindGlobal(Elf *elf, const char *name)
 {
     for (size_t i = 0; i < Elf_SymbolCount(elf); i++) {
         Elf_Sym *sym = Elf_SymbolAt(elf, i);
@@ -44,10 +44,8 @@ static Elf_Sym *Link_FindGlobal(Elf *elf, const char *name)
     return NULL;
 }
 
-// Merges one input object into the output: same-named sections are
-// concatenated, globals are unified by name (undefined references fold into a
-// definition), locals are kept, and relocations are rebased onto the merge.
-static void Link_Merge(Elf *out, Elf *in)
+// Merges one input object into the output, unifying globals and rebasing relocations.
+void Link_Merge(Elf *out, Elf *in)
 {
     size_t nsec = Elf_SectionCount(in);
     size_t nsym = Elf_SymbolCount(in);
@@ -124,7 +122,7 @@ static void Link_Merge(Elf *out, Elf *in)
 }
 
 // Load address requested for a section by name, or 0 if it is unplaced.
-static uint64_t Link_PlacedAddr(const Link_Options *opts, const char *name, int *placed)
+uint64_t Link_PlacedAddr(const Link_Options *opts, const char *name, int *placed)
 {
     for (int i = 0; i < opts->lo_nplaces; i++) {
         if (strcmp(opts->lo_places[i].lp_name, name) == 0) {
@@ -136,9 +134,8 @@ static uint64_t Link_PlacedAddr(const Link_Options *opts, const char *name, int 
     return 0;
 }
 
-// Assigns a load address to every allocatable section: a requested -place
-// address, else the next free page above the previously placed sections.
-static void Link_PlaceSections(Elf *elf, const Link_Options *opts)
+// Assigns each allocatable section its -place address, else the next free page.
+void Link_PlaceSections(Elf *elf, const Link_Options *opts)
 {
     uint64_t next = LINK_BASE + LINK_PAGE;
     for (size_t i = 0; i < Elf_SectionCount(elf); i++) {
@@ -160,7 +157,7 @@ static void Link_PlaceSections(Elf *elf, const Link_Options *opts)
 }
 
 // Aborts if any relocation references a symbol that was never defined.
-static void Link_CheckDefined(Elf *elf)
+void Link_CheckDefined(Elf *elf)
 {
     for (size_t i = 0; i < Elf_SectionCount(elf); i++) {
         Elf_Sec *sec = Elf_SectionAt(elf, i);

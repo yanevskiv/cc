@@ -11,25 +11,67 @@ static Asm_x86_64_Item *Asm_x86_64_Tail;
 
 // 64-bit register names, indexed by Asm_x86_64_Reg.
 static const char *Asm_x86_64_Reg64Name[16] = {
-    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
-    "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"
+    "rax",
+    "rcx",
+    "rdx",
+    "rbx",
+    "rsp",
+    "rbp",
+    "rsi",
+    "rdi",
+    "r8",
+    "r9",
+    "r10",
+    "r11",
+    "r12",
+    "r13",
+    "r14",
+    "r15"
 };
 
 // 8-bit (low-byte) register names, indexed by Asm_x86_64_Reg.
 static const char *Asm_x86_64_Reg8Name[16] = {
-    "al",  "cl",  "dl",   "bl",   "spl",  "bpl",  "sil",  "dil",
-    "r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b"
+    "al",
+    "cl",
+    "dl",
+    "bl",
+    "spl",
+    "bpl",
+    "sil",
+    "dil",
+    "r8b",
+    "r9b",
+    "r10b",
+    "r11b",
+    "r12b",
+    "r13b",
+    "r14b",
+    "r15b"
 };
 
 // Mnemonics, indexed by Asm_x86_64_Op.
 static const char *Asm_x86_64_OpName[] = {
-    [ASM_X86_64_OP_MOV] = "mov",  [ASM_X86_64_OP_LEA] = "lea",  [ASM_X86_64_OP_PUSH] = "push",
-    [ASM_X86_64_OP_POP] = "pop",  [ASM_X86_64_OP_ADD] = "add",  [ASM_X86_64_OP_SUB] = "sub",
-    [ASM_X86_64_OP_IMUL] = "imul", [ASM_X86_64_OP_IDIV] = "idiv", [ASM_X86_64_OP_CQO] = "cqo",
-    [ASM_X86_64_OP_NEG] = "neg",  [ASM_X86_64_OP_CMP] = "cmp",  [ASM_X86_64_OP_SETE] = "sete",
-    [ASM_X86_64_OP_SETNE] = "setne", [ASM_X86_64_OP_SETL] = "setl", [ASM_X86_64_OP_SETLE] = "setle",
-    [ASM_X86_64_OP_MOVZB] = "movzb", [ASM_X86_64_OP_JMP] = "jmp", [ASM_X86_64_OP_JE] = "je",
-    [ASM_X86_64_OP_JNE] = "jne",  [ASM_X86_64_OP_CALL] = "call", [ASM_X86_64_OP_RET] = "ret",
+    [ASM_X86_64_OP_MOV]     = "mov",
+    [ASM_X86_64_OP_LEA]     = "lea",
+    [ASM_X86_64_OP_PUSH]    = "push",
+    [ASM_X86_64_OP_POP]     = "pop",
+    [ASM_X86_64_OP_ADD]     = "add",
+    [ASM_X86_64_OP_SUB]     = "sub",
+    [ASM_X86_64_OP_IMUL]    = "imul",
+    [ASM_X86_64_OP_IDIV]    = "idiv",
+    [ASM_X86_64_OP_CQO]     = "cqo",
+    [ASM_X86_64_OP_NEG]     = "neg",
+    [ASM_X86_64_OP_CMP]     = "cmp",
+    [ASM_X86_64_OP_SETE]    = "sete",
+    [ASM_X86_64_OP_SETNE]   = "setne",
+    [ASM_X86_64_OP_SETL]    = "setl",
+    [ASM_X86_64_OP_SETLE]   = "setle",
+    [ASM_X86_64_OP_MOVZB]   = "movzb",
+    [ASM_X86_64_OP_JMP]     = "jmp",
+    [ASM_X86_64_OP_JE]      = "je",
+    [ASM_X86_64_OP_JNE]     = "jne",
+    [ASM_X86_64_OP_CALL]    = "call",
+    [ASM_X86_64_OP_RET]     = "ret",
     [ASM_X86_64_OP_SYSCALL] = "syscall"
 };
 

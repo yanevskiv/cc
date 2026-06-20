@@ -30,11 +30,11 @@ C code:
 
         Every function and global is Prefix_PascalCase, e.g. Gen_EmitExpr,
         Asm_EmitAdd, Ast_Program.  A module's names live in h/<mod>.h, and
-        the header is meant to map the source: it declares the functions
-        and the principal structs the .c file defines, in the same order,
-        so a reader can see the shape of the .c from the .h alone.  Only a
-        truly local helper -- one nobody outside the file could ever want
-        to call -- stays `static` and out of the header.  A module's
+        the header is meant to map the source: it declares every function
+        the .c file defines, and the principal structs, in the same order,
+        so a reader sees the whole shape of the .c from the .h alone and is
+        never surprised by a function the header did not mention.  Every
+        function is declared -- none is hidden behind `static`.  A module's
         file-scope state (its static variables) and private #defines stay
         in the .c; the header maps the interface, not the storage.
 
