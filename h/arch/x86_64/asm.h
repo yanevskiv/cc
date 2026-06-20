@@ -4,9 +4,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-// An ELF object the back end builds; defined in util/elf.h.
-typedef struct Elf Elf;
-
 // Registers
 typedef enum {
     ASM_X86_64_REG_RAX = 0,
@@ -73,8 +70,45 @@ typedef struct {
     int                    ao_width;  // REG width in bits: 8 or 64
 } Asm_x86_64_Operand;
 
-// Reset
+// The kind of one item in the instruction list.
+typedef enum {
+    ASM_X86_64_ITEM_INSTR,     // ai_op, ai_dst, ai_src
+    ASM_X86_64_ITEM_LABEL,     // ai_label defined here
+    ASM_X86_64_ITEM_GLOBL,     // ai_label marked global
+    ASM_X86_64_ITEM_SECTION,   // switch to ai_secname
+    ASM_X86_64_ITEM_BYTES,     // ai_bytes / ai_nbytes raw data
+    ASM_X86_64_ITEM_DIRECTIVE  // ai_text raw assembler line
+} Asm_x86_64_ItemKind;
+
+// One node in the ordered instruction list.
+typedef struct Asm_x86_64_Item Asm_x86_64_Item;
+struct Asm_x86_64_Item {
+    Asm_x86_64_Item     *ai_next;
+    Asm_x86_64_ItemKind  ai_kind;
+    Asm_x86_64_Op        ai_op;       // INSTR
+    Asm_x86_64_Operand   ai_dst;      // INSTR
+    Asm_x86_64_Operand   ai_src;      // INSTR
+    const char   *ai_label;    // LABEL / GLOBL
+    const char   *ai_text;     // DIRECTIVE
+    const char   *ai_secname;  // SECTION
+    uint32_t      ai_sectype;  // SECTION
+    uint64_t      ai_secflags; // SECTION
+    unsigned char *ai_bytes;   // BYTES
+    int           ai_nbytes;   // BYTES
+};
+
+// Operand constructors
+Asm_x86_64_Operand Asm_x86_64_Reg64(Asm_x86_64_Reg reg);
+Asm_x86_64_Operand Asm_x86_64_Reg8(Asm_x86_64_Reg reg);
+Asm_x86_64_Operand Asm_x86_64_Imm(long val);
+Asm_x86_64_Operand Asm_x86_64_Mem(Asm_x86_64_Reg base, int disp);
+Asm_x86_64_Operand Asm_x86_64_Rip(const char *label);
+Asm_x86_64_Operand Asm_x86_64_Target(const char *label);
+
+// Instruction list
+Asm_x86_64_Item *Asm_x86_64_New(Asm_x86_64_ItemKind kind);
 void Asm_x86_64_Reset(void);
+Asm_x86_64_Item *Asm_x86_64_Items(void);
 
 // Non-instruction items
 void Asm_x86_64_EmitLabel(const char *name, ...) __attribute__((format(printf, 1, 2)));
@@ -127,8 +161,9 @@ void Asm_x86_64_EmitCall(const char *label, ...) __attribute__((format(printf, 1
 void Asm_x86_64_EmitRet(void);
 void Asm_x86_64_EmitSyscall(void);
 
-// Back ends
+// Text output
+void Asm_x86_64_PrintOperand(FILE *out, const Asm_x86_64_Operand *op);
+void Asm_x86_64_PrintInstr(FILE *out, const Asm_x86_64_Item *item);
 void Asm_x86_64_PrintText(FILE *out);
-Elf *Asm_x86_64_BuildObject(void);
 
 #endif // ASM_X86_64_H
