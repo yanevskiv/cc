@@ -17,6 +17,7 @@
 #define ELF_SHT_SYMTAB   2
 #define ELF_SHT_STRTAB   3
 #define ELF_SHT_RELA     4
+#define ELF_SHT_NOBITS   8
 
 // Section header flags (sec_flags).
 #define ELF_SHF_WRITE     0x1

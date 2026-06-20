@@ -46,7 +46,8 @@ Naming conventions:
             file has no header), argument parsing over Txt_*/Enc_*
     Ld_*    linker driver: ld.c's int main() and static helpers (the file
             has no header), argument parsing over Link_*
-    Str_*   string helpers (incl. <regex.h> wrappers for the assembler)
+    Str_*   string helpers (Str_List/Str_Split and <regex.h> wrappers)
+    File_*  whole-file read/write helpers (File_GetContent/PutContent)
 
 Tools (binaries):
 
@@ -55,8 +56,8 @@ Tools (binaries):
     build/bin/ld   .o ... -> a.out | .o (-r)
     [horizon]      ar (.a archives), objcopy, objdump
 
-    cc.c and ld.c each own an int main(); the common modules (elf.o,
-    asm.o, str.o, ...) link into both.  The Makefile builds shared objects
+    cc.c, as.c and ld.c each own an int main(); the common modules (elf.o,
+    asm.o, str.o, ...) link into them.  The Makefile builds shared objects
     once and a per-tool main on top.
 
 Module dependency:
@@ -239,7 +240,7 @@ Stage 5b -- ELF rewrite: generic ELF library + link/reloc split   [DONE]
     objects, system ld links them to a 42, and -place works by literal ELF
     section name (.text/.rodata), not only the text/data aliases.
 
-Stage 6 -- as (assembler: .s -> .o)
+Stage 6 -- as (assembler: .s -> .o)   [DONE]
 
     The encoder and the ET_REL writer already exist (Stages 2-3), so the
     assembler is mostly a front end: parse AT&T text into the same Asm_*
@@ -247,25 +248,29 @@ Stage 6 -- as (assembler: .s -> .o)
     is the inverse of Txt_*'s writer, and because cc -S emits exactly the
     syntax as parses, the two round-trip by construction.
 
-    Parsing is line-oriented and regex-driven: extend Str_* with thin
-    <regex.h> wrappers (Str_RegexMatch, Str_RegexExtract), then match the
-    three line shapes -- `label:`, `.directive args`, `mnemonic op, op`.
-    Operands cover the forms the printer emits: %reg, $imm, disp(%base),
-    sym(%rip), sym.  A new Txt_x86_64_Att_Parse (in txt.c, paired with
-    Txt_x86_64_Att_Write) turns text into the IR; src/as.c (As_*) is just
-    main + file I/O + argument parsing.
+    Parsing is line-oriented and regex-driven: File_GetContent slurps the
+    file, Str_Split breaks it into lines, and thin <regex.h> wrappers
+    (Str_RegexMatch, Str_RegexExtract) match the three line shapes --
+    `label:`, `.directive args`, `mnemonic op, op`.  Operands cover the
+    forms the printer emits: %reg, $imm, disp(%base), sym(%rip), sym.
+    Txt_x86_64_Att_Parse (in txt.c, paired with Txt_x86_64_Att_Write)
+    turns text into the IR; src/as.c (As_*) is just main + file I/O +
+    argument parsing.
 
-    Directive set is small -- what cc -S emits, plus a little:
-        .text .data .section .rodata .globl/.global .extern
-        .string .byte .word .long .quad .skip .align .file
-    No .macro, no .if, no AVX-512 -- only the closed instruction set we
-    already encode.  Undefined symbols (e.g. call printf) become
-    R_X86_64_PLT32/PC32 relocations, exactly as cc -c records them.
+    Directive set is small -- what cc -S emits, plus a little.  Data and
+    structure are honoured: .text .data .rodata .section, .globl/.global,
+    .string/.asciz/.ascii, .byte .word .long .quad, .skip/.zero/.space.
+    Metadata is accepted but passed through untouched and dropped by the
+    encoder (same as cc's own .file/.note lines): .file .ident .type .size
+    .cfi_* .extern .align.  A trailing AT&T size suffix (movq, pushq,
+    movzbl) is tolerated.  No .macro, no .if, no AVX-512 -- only the closed
+    instruction set we already encode.  Undefined symbols (e.g. call printf)
+    become R_X86_64_PLT32/PC32 relocations, exactly as cc -c records them.
 
-    Done when: `cc -S foo.c -o foo.s && as foo.s -o foo.o` yields an object
-    equal in effect to `cc -c foo.c -o foo.o` (both link and run the same),
-    and our as assembles a hand-written runtime .s; cross-check: the system
-    as accepts the same .s, and our as feeds the system ld.
+    Done (make stage6): `cc -S foo.s && as foo.s -o foo.o` gives an object
+    that links and runs the same as `cc -c` (byte-identical .text), and our
+    as assembles a hand-written runtime .s; cross-check: the system as
+    accepts the same .s, and our as feeds our own ld.
 
 Stage 7 -- freestanding libc as a linked object
 

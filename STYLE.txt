@@ -25,6 +25,7 @@ C code:
             Rel_*   architecture relocation types and patching
             Link_*  static linker policy: merge, resolve, place
             Str_*   string helpers
+            File_*  whole-file read and write helpers
 
         An architecture-specific module carries an arch infix:
         Asm_x86_64_*, Enc_x86_64_*, Txt_x86_64_*, Gen_x86_64_*,
