@@ -305,6 +305,44 @@ Horizon (after the core pipeline is self-hosting):
     objdump   disassemble + dump our own objects (closes the loop: every
               tool checkable without GNU binutils).
 
+--------------------------------------------------------------------------
+
+Open questions (language and multi-arch, not yet staged):
+
+    Language coverage -- parser.y accepts a small subset today: no
+    arrays, no pointer deref / address-of (stars parse in a declarator
+    but do nothing, & is lexed but never used as a unary operator), no
+    structs/unions/enums/typedef, no globals (external_decl is
+    functions only), no switch/do-while/++/--/compound-assign/ternary/
+    bitwise ops, no preprocessor.  Arrays and real pointer semantics
+    are the priority -- Stage 7's freestanding libc needs at least one
+    level of indexing before it can do much.
+
+    Sem_*  a semantic-analysis pass run from cc.c right after
+           yyparse(), before Gen_*.  Lives in ast/ alongside Ast_*
+           (ast/sem.h, ast/sem.c) -- one directory, many prefixes, the
+           same way arch/x86_64/ already holds Asm_/Enc_/Gen_/Rel_/
+           Txt_, so no rename of ast/ is needed.  Wants an actual
+           Ast_Type on Ast_Var/Ast_Node first (today type_name is
+           parsed and discarded); once that exists, Sem_Check absorbs
+           the checks parser.y already does inline (undeclared
+           identifier, non-assignable lvalue) and adds call
+           arg-count/param-count and assignment-type checks.
+
+    Multiple architectures -- a second Gen_* back end (e.g. Gen_llvm_*
+    in arch/llvm/, emitting .ll text and shelling out to clang/llc)
+    stays outside the owned pipeline: no Asm_llvm_/Enc_llvm_/Rel_llvm_,
+    and Elf_*/Link_*/as/ld never see it, since object production and
+    linking become clang's/llc's job on that path.  cc.c stays the one
+    driver file for every architecture -- no cc_llvm.c -- selected by
+    the existing TARGET_ARCH build variable rather than a runtime
+    -march= switch (which today only ever accepts DEFAULT_ARCH).  All
+    arch-specific complexity stays inside arch/<name>/; cc.c itself
+    stays a thin front-end-to-backend driver regardless of which arch
+    is selected.  Whether this belongs in the project at all is still
+    open: it is a convenience escape hatch, not a step toward the "own
+    toolchain, no gcc, no binutils" goal the rest of this file serves.
+
 Notes:
 
     - Stages stay independently shippable: Stage 2's direct-ELF path keeps

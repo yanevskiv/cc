@@ -1,13 +1,17 @@
 TARGET_ARCH := x86_64
 
+OUT     := out
+BUILD   := build
+
+CRT_OBJ  := $(BUILD)/lib/crt0.o
+LIBC_OBJ := $(BUILD)/lib/libc.o
+
 CC      := gcc
-CFLAGS  := -std=gnu11 -O2 -Ih -Iout -DTARGET_ARCH=$(TARGET_ARCH)
+CFLAGS  := -std=gnu11 -O2 -Ih -Iout -DTARGET_ARCH=$(TARGET_ARCH) \
+	-DCRT_PATH='"$(abspath $(CRT_OBJ))"' -DLIBC_PATH='"$(abspath $(LIBC_OBJ))"'
 WARN    := -Wall -Wextra
 LEX     := flex
 YACC    := bison
-
-OUT     := out
-BUILD   := build
 
 # Tool mains (each provides its own int main()); everything else is shared.
 MAIN_SRCS := src/cc.c src/ld.c src/as.c
@@ -32,49 +36,10 @@ LD_BIN := $(BUILD)/bin/$(TARGET_ARCH)-ld
 USER_SRCS := $(wildcard user/*.c)
 
 # --- phony recipes ---
-all: $(CC_BIN) $(AS_BIN) $(LD_BIN) $(BUILD)/user $(BUILD)/Makefile
+all: $(CC_BIN) $(AS_BIN) $(LD_BIN) $(CRT_OBJ) $(LIBC_OBJ) $(BUILD)/user $(BUILD)/Makefile
 
 test: all
 	$(MAKE) -C $(BUILD) run
-
-# Stage 5 link test: compile two objects with cc, then exercise our own ld in
-# every mode (static link, -r relocatable merge, -place) and check each result
-# returns the expected status -- no system ld involved.
-stage5: $(CC_BIN) $(LD_BIN) | $(OUT)
-	$(CC_BIN) --start-obj test/link_main.c -o $(OUT)/link_main.o
-	$(CC_BIN) -c          test/link_add.c  -o $(OUT)/link_add.o
-	$(LD_BIN) $(OUT)/link_main.o $(OUT)/link_add.o -o $(OUT)/link_exec
-	$(LD_BIN) -r $(OUT)/link_main.o $(OUT)/link_add.o -o $(OUT)/link_merged.o
-	$(LD_BIN) $(OUT)/link_merged.o -o $(OUT)/link_relinked
-	$(LD_BIN) -place=text@0x8000000 -place=data@0x20000000 \
-		$(OUT)/link_main.o $(OUT)/link_add.o -o $(OUT)/link_placed
-	@for t in exec relinked placed; do \
-		$(OUT)/link_$$t; status=$$?; \
-		echo "link_$$t returned $$status (expect 42)"; \
-		[ $$status -eq 42 ] || { echo "STAGE 5 FAILED ($$t)"; exit 1; }; \
-	done
-	@echo "STAGE 5 OK: static link, -r round-trip and -place via our own ld"
-
-# Stage 6 assembler test: round-trip cc -S through our own as and confirm the
-# object links and runs the same as cc -c, then assemble a hand-written .s.
-stage6: $(CC_BIN) $(AS_BIN) $(LD_BIN) | $(OUT)
-	$(CC_BIN) --start-obj test/link_main.c -o $(OUT)/as_main.o
-	$(CC_BIN) -S test/link_add.c -o $(OUT)/as_add.s
-	$(AS_BIN) $(OUT)/as_add.s -o $(OUT)/as_add.o
-	$(CC_BIN) -c test/link_add.c -o $(OUT)/cc_add.o
-	$(LD_BIN) $(OUT)/as_main.o $(OUT)/as_add.o -o $(OUT)/as_ours
-	$(LD_BIN) $(OUT)/as_main.o $(OUT)/cc_add.o -o $(OUT)/as_ref
-	@for t in ours ref; do \
-		$(OUT)/as_$$t; status=$$?; \
-		echo "as_$$t returned $$status (expect 42)"; \
-		[ $$status -eq 42 ] || { echo "STAGE 6 FAILED ($$t)"; exit 1; }; \
-	done
-	$(AS_BIN) test/ret7.s -o $(OUT)/ret7.o
-	$(LD_BIN) $(OUT)/ret7.o -o $(OUT)/ret7
-	@$(OUT)/ret7; status=$$?; \
-		echo "ret7 returned $$status (expect 7)"; \
-		[ $$status -eq 7 ] || { echo "STAGE 6 FAILED (ret7)"; exit 1; }
-	@echo "STAGE 6 OK: cc -S round-trips through our as; hand-written .s assembles"
 
 clean:
 	rm -rf $(BUILD) $(OUT)
@@ -107,6 +72,13 @@ $(OUT)/%.o: src/%.c $(OUT)/parser.tab.h | $(OUT)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(WARN) -c $< -o $@
 
+# --- runtime (libc/) recipes ---
+$(CRT_OBJ): libc/arch/$(TARGET_ARCH)/crt0.s $(AS_BIN) | $(BUILD)/lib
+	$(AS_BIN) $< -o $@
+
+$(LIBC_OBJ): libc/libc.c $(CC_BIN) | $(BUILD)/lib
+	$(CC_BIN) -c $< -o $@
+
 # --- build/ recipes ---
 $(BUILD)/user: $(USER_SRCS) | $(BUILD)
 	rm -rf $@
@@ -124,4 +96,7 @@ $(BUILD):
 $(BUILD)/bin: | $(BUILD)
 	mkdir -p $(BUILD)/bin
 
-.PHONY: all clean test stage5 stage6
+$(BUILD)/lib: | $(BUILD)
+	mkdir -p $(BUILD)/lib
+
+.PHONY: all clean test

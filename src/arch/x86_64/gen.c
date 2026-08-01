@@ -18,8 +18,8 @@
 // Required %rsp alignment, in bytes, at the point of a `call`.
 #define STACK_ALIGN 16
 
-// Linux x86-64 syscall number for exit(2).
-#define SYS_EXIT 60
+// Runtime objects the default (linked) output is always merged with.
+static const char *Gen_x86_64_Runtime[] = { CRT_PATH, LIBC_PATH };
 
 // Number of values currently pushed with Gen_x86_64_EmitPush().
 static int Gen_x86_64_Depth;
@@ -325,17 +325,6 @@ void Gen_x86_64_EmitDataSection(void)
     }
 }
 
-// Emits the _start runtime: call main, then exit with its return value.
-void Gen_x86_64_EmitStartup(void)
-{
-    Asm_x86_64_EmitGlobl("_start");
-    Asm_x86_64_EmitLabel("_start");
-    Asm_x86_64_EmitCall("main");
-    Asm_x86_64_EmitMovRR(ASM_X86_64_REG_RAX, ASM_X86_64_REG_RDI);
-    Asm_x86_64_EmitMovImm(SYS_EXIT, ASM_X86_64_REG_RAX);
-    Asm_x86_64_EmitSyscall();
-}
-
 // Emits the prologue, body and epilogue for every function.
 void Gen_x86_64_EmitFunctions(Ast_Func *prog)
 {
@@ -376,18 +365,15 @@ void Gen_x86_64_EmitFunctions(Ast_Func *prog)
     }
 }
 
-// Emits the .text section; freestanding output also gets a _start runtime.
-void Gen_x86_64_EmitTextSection(Ast_Func *prog, int freestanding)
+// Emits the .text section.
+void Gen_x86_64_EmitTextSection(Ast_Func *prog)
 {
     Asm_x86_64_EmitSection(".text", ELF_SHT_PROGBITS, ELF_SHF_ALLOC | ELF_SHF_EXECINSTR);
-    if (freestanding) {
-        Gen_x86_64_EmitStartup();
-    }
     Gen_x86_64_EmitFunctions(prog);
 }
 
 // Builds the instruction list for the whole program.
-void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding)
+void Gen_x86_64_BuildProgram(Ast_Func *prog)
 {
     Asm_x86_64_Reset();
     Gen_x86_64_Depth   = 0;
@@ -395,23 +381,33 @@ void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding)
 
     Asm_x86_64_EmitDirective(".file \"cc\"");
     Gen_x86_64_EmitDataSection();
-    Gen_x86_64_EmitTextSection(prog, freestanding);
+    Gen_x86_64_EmitTextSection(prog);
     Asm_x86_64_EmitDirective(".section .note.GNU-stack,\"\",@progbits");
 }
 
 // Emits assembly text for the whole program to out.
 void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog)
 {
-    Gen_x86_64_BuildProgram(prog, 0);
+    Gen_x86_64_BuildProgram(prog);
     Txt_x86_64_Att_Write(out);
 }
 
-// Encodes the whole program as a freestanding static ET_EXEC, linked in place, to out.
+// Encodes the whole program and links it against the runtime into a static ET_EXEC, to out.
 void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 {
-    Gen_x86_64_BuildProgram(prog, 1);
-    Elf          *elf  = Enc_x86_64_Object();
-    Link_Options  opts = { .lo_entry = "_start" };
+    Gen_x86_64_BuildProgram(prog);
+    Elf *elf = Enc_x86_64_Object();
+
+    for (size_t i = 0; i < sizeof Gen_x86_64_Runtime / sizeof Gen_x86_64_Runtime[0]; i++) {
+        Elf *runtime = Elf_Read(Gen_x86_64_Runtime[i]);
+        if (! runtime) {
+            Show_Error("cannot read runtime object '%s'", Gen_x86_64_Runtime[i]);
+        }
+        Link_Merge(elf, runtime);
+        Elf_Free(runtime);
+    }
+
+    Link_Options opts = { .lo_entry = "_start" };
     Link_Exec(elf, &opts);
     Elf_WriteFile(elf, out);
     Elf_Free(elf);
@@ -420,16 +416,7 @@ void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog)
 // Encodes the whole program as a relocatable ELF object (.o) to out, references left undefined.
 void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog)
 {
-    Gen_x86_64_BuildProgram(prog, 0);
-    Elf *elf = Enc_x86_64_Object();
-    Elf_WriteFile(elf, out);
-    Elf_Free(elf);
-}
-
-// Stage 4 harness: a relocatable object that also carries the _start runtime.
-void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog)
-{
-    Gen_x86_64_BuildProgram(prog, 1);
+    Gen_x86_64_BuildProgram(prog);
     Elf *elf = Enc_x86_64_Object();
     Elf_WriteFile(elf, out);
     Elf_Free(elf);

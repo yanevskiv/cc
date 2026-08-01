@@ -25,15 +25,13 @@ void Gen_x86_64_AssignLvarOffsets(Ast_Func *func);
 void Gen_x86_64_EmitDataSection(void);
 
 // Text section
-void Gen_x86_64_EmitStartup(void);
 void Gen_x86_64_EmitFunctions(Ast_Func *prog);
-void Gen_x86_64_EmitTextSection(Ast_Func *prog, int freestanding);
+void Gen_x86_64_EmitTextSection(Ast_Func *prog);
 
 // Top-level code generation
-void Gen_x86_64_BuildProgram(Ast_Func *prog, int freestanding);
+void Gen_x86_64_BuildProgram(Ast_Func *prog);
 void Gen_x86_64_CodegenAsm(FILE *out, Ast_Func *prog);
 void Gen_x86_64_CodegenExec(FILE *out, Ast_Func *prog);
 void Gen_x86_64_CodegenRel(FILE *out, Ast_Func *prog);
-void Gen_x86_64_CodegenRelStart(FILE *out, Ast_Func *prog);
 
 #endif // GEN_X86_64_H
