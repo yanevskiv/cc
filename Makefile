@@ -7,7 +7,7 @@ CRT_OBJ  := $(BUILD)/lib/crt0.o
 LIBC_OBJ := $(BUILD)/lib/libc.o
 
 CC      := gcc
-CFLAGS  := -std=gnu11 -O2 -Ih -Iout -DTARGET_ARCH=$(TARGET_ARCH) \
+CFLAGS  := -std=gnu99 -O2 -Ih -Iout -DTARGET_ARCH=$(TARGET_ARCH) \
 	-DCRT_PATH='"$(abspath $(CRT_OBJ))"' -DLIBC_PATH='"$(abspath $(LIBC_OBJ))"'
 WARN    := -Wall -Wextra
 LEX     := flex

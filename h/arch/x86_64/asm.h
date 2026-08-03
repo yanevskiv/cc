@@ -110,11 +110,11 @@ void Asm_x86_64_Reset(void);
 Asm_x86_64_Item *Asm_x86_64_Items(void);
 
 // Non-instruction items
-void Asm_x86_64_EmitLabel(const char *name, ...) __attribute__((format(printf, 1, 2)));
+void Asm_x86_64_EmitLabel(const char *name, ...);
 void Asm_x86_64_EmitSection(const char *name, uint32_t type, uint64_t flags);
-void Asm_x86_64_EmitGlobl(const char *name, ...) __attribute__((format(printf, 1, 2)));
+void Asm_x86_64_EmitGlobl(const char *name, ...);
 void Asm_x86_64_EmitBytes(const void *data, int len);
-void Asm_x86_64_EmitDirective(const char *text, ...) __attribute__((format(printf, 1, 2)));
+void Asm_x86_64_EmitDirective(const char *text, ...);
 
 // Register-to-register
 void Asm_x86_64_EmitAdd(Asm_x86_64_Reg src, Asm_x86_64_Reg dst);
@@ -146,17 +146,17 @@ void Asm_x86_64_EmitSubImm(long imm, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitMovLoad(Asm_x86_64_Reg base, int disp, Asm_x86_64_Reg dst);
 void Asm_x86_64_EmitMovStore(Asm_x86_64_Reg src, Asm_x86_64_Reg base, int disp);
 void Asm_x86_64_EmitLea(Asm_x86_64_Reg base, int disp, Asm_x86_64_Reg dst);
-void Asm_x86_64_EmitLeaRip(Asm_x86_64_Reg dst, const char *label, ...) __attribute__((format(printf, 2, 3)));
+void Asm_x86_64_EmitLeaRip(Asm_x86_64_Reg dst, const char *label, ...);
 
 // Stack
 void Asm_x86_64_EmitPush(Asm_x86_64_Reg reg);
 void Asm_x86_64_EmitPop(Asm_x86_64_Reg reg);
 
 // Jumps, calls and returns
-void Asm_x86_64_EmitJmp(const char *label, ...) __attribute__((format(printf, 1, 2)));
-void Asm_x86_64_EmitJe(const char *label, ...) __attribute__((format(printf, 1, 2)));
-void Asm_x86_64_EmitJne(const char *label, ...) __attribute__((format(printf, 1, 2)));
-void Asm_x86_64_EmitCall(const char *label, ...) __attribute__((format(printf, 1, 2)));
+void Asm_x86_64_EmitJmp(const char *label, ...);
+void Asm_x86_64_EmitJe(const char *label, ...);
+void Asm_x86_64_EmitJne(const char *label, ...);
+void Asm_x86_64_EmitCall(const char *label, ...);
 void Asm_x86_64_EmitRet(void);
 void Asm_x86_64_EmitSyscall(void);
 
